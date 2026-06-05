@@ -59,7 +59,7 @@ for proving the hard core (CRDT sync + agent surface) before any human UI.
 - [x] M2 HTTP API + FTS + spaces/auth — code in `/brain` (✅ REST API, FTS5 search, tokens, per-space RBAC on HTTP + WS)
 - [x] M2.5 Obsidian vault importer (`08`) — code in `/brain` (✅ two-pass, links/stubs/embeds, frontmatter, idempotent re-import, write-back).
 - [x] Self-host packaging — `brain/Dockerfile` + `docker-compose.yml` (✅ one-command brain; verified: build, run, restart-on-volume persistence).
-- [ ] M3 CLI arm with offline cache + sync
+- [x] M3 CLI arm with offline cache + sync — code in `/arm` (✅ local replica, disk cache, offline edit→reconnect sync, pull scope, two-arm convergence)
 - [x] M4 MCP server (tools) — code in `/mcp` (✅ 9 agent tools over the brain API)
 - [x] M4.1 MCP resources + live subscriptions — code in `/mcp` (✅ note resources + `resources/updated` notifications via a brain WS socket). Prompts still TODO.
 - [ ] M5 Semantic search + hybrid ranking
