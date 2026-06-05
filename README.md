@@ -26,6 +26,7 @@ back to the central brain.
 |---------|-----------|------|
 | [`spike/`](spike/) | M0 ✅ | Convergence prototype — validated Yjs + lazy-neighborhood at 250k nodes. |
 | [`brain/`](brain/) | M1–M2 ✅ | Persistent sync relay (log, snapshots, spaces, restart, derived index) + HTTP API, FTS5 search, token auth & per-space RBAC. |
+| [`mcp/`](mcp/) | M4 ✅ | MCP server — 9 agent tools (search/read/write/link/traverse) over the brain API; the agent-facing surface. |
 
 ### Specs
 

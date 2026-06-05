@@ -59,7 +59,7 @@ for proving the hard core (CRDT sync + agent surface) before any human UI.
 - [x] M2 HTTP API + FTS + spaces/auth — code in `/brain` (✅ REST API, FTS5 search, tokens, per-space RBAC on HTTP + WS)
 - [ ] M2.5 Obsidian vault importer (`08`) + self-host packaging
 - [ ] M3 CLI arm with offline cache + sync
-- [ ] M4 MCP server (tools + resources)
+- [x] M4 MCP server (tools) — code in `/mcp` (✅ 9 agent tools over the brain API; resources/subscriptions = M4.1)
 - [ ] M5 Semantic search + hybrid ranking
 - [ ] M6 Agent capabilities + provenance + draft-gate-by-default
 - [ ] M7 Index partitioning + relay scaling
