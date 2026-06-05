@@ -113,4 +113,25 @@ describe("M4 MCP server", () => {
     const r = await call("list_spaces");
     expect(r.data.some((m: any) => m.space === "eng" && m.role === "editor")).toBe(true);
   });
+
+  it("exposes guided prompts", async () => {
+    const { prompts } = await mcp.listPrompts();
+    expect(prompts.map((p) => p.name).sort()).toEqual(["capture-decision", "onboard"]);
+  });
+
+  it("capture-decision returns a structured decision template", async () => {
+    const r = await mcp.getPrompt({ name: "capture-decision", arguments: { title: "Adopt Postgres" } });
+    const text = (r.messages[0].content as { text: string }).text;
+    expect(text).toContain("## Decision");
+    expect(text).toContain("create_note");
+  });
+
+  it("onboard gathers the service's graph context", async () => {
+    await call("create_note", { title: "Search Service", body: "indexes documents" });
+    await call("link_notes", { from: "Search Service", to: "Billing Service", type: "calls" });
+    const r = await mcp.getPrompt({ name: "onboard", arguments: { service: "Search Service" } });
+    const text = (r.messages[0].content as { text: string }).text;
+    expect(text).toContain("Search Service");
+    expect(text).toContain("Billing Service"); // 1-hop neighbor surfaced
+  });
 });

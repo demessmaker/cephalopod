@@ -61,7 +61,7 @@ for proving the hard core (CRDT sync + agent surface) before any human UI.
 - [x] Self-host packaging — `brain/Dockerfile` + `docker-compose.yml` (✅ one-command brain; verified: build, run, restart-on-volume persistence).
 - [x] M3 CLI arm with offline cache + sync — code in `/arm` (✅ local replica, disk cache, offline edit→reconnect sync, pull scope, two-arm convergence)
 - [x] M4 MCP server (tools) — code in `/mcp` (✅ 9 agent tools over the brain API)
-- [x] M4.1 MCP resources + live subscriptions — code in `/mcp` (✅ note resources + `resources/updated` notifications via a brain WS socket). Prompts still TODO.
+- [x] M4.1 MCP resources + live subscriptions + prompts — code in `/mcp` (✅ note resources, `resources/updated` notifications, and `capture-decision`/`onboard` prompts).
 - [x] M5 Semantic search + hybrid ranking — code in `/brain` (✅ pluggable embedder, vector search, RRF hybrid; MCP `search` gains `mode`). Real-model embedder is a drop-in.
 - [x] M6 Agent provenance + draft-gate-by-default — code in `/brain` (✅ agent writes stamped + forced #draft, hidden from discovery, human-promote, per-space opt-out)
 - [ ] M7 Index partitioning + relay scaling

@@ -26,7 +26,7 @@ back to the central brain.
 |---------|-----------|------|
 | [`spike/`](spike/) | M0 ✅ | Convergence prototype — validated Yjs + lazy-neighborhood at 250k nodes. |
 | [`brain/`](brain/) | M1–M2.5 ✅ | Persistent sync relay (log, snapshots, spaces, restart, derived index) + HTTP API, FTS5 search, token auth & RBAC, and an Obsidian vault importer. |
-| [`mcp/`](mcp/) | M4–M4.1 ✅ | MCP server — 9 agent tools + note **resources** and **live subscriptions** (`resources/updated`) over the brain API; the agent-facing surface. |
+| [`mcp/`](mcp/) | M4–M4.1 ✅ | MCP server — 9 agent tools, note **resources**, **live subscriptions** (`resources/updated`), and guided **prompts** (`capture-decision`/`onboard`); the agent-facing surface. |
 | [`arm/`](arm/) | M3 ✅ | CLI arm — a developer's local replica: offline disk cache, edit-offline→reconnect sync, pull-a-scope, two-arm convergence. |
 
 ### Quickstart (self-host)

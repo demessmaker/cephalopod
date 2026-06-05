@@ -5,6 +5,7 @@ import { SubscribeRequestSchema, UnsubscribeRequestSchema } from "@modelcontextp
 import { z } from "zod";
 import type { CephalopodClient } from "./client.js";
 import type { BrainSocket } from "./brainsocket.js";
+import { registerPrompts } from "./prompts.js";
 
 const noteUri = (space: string, id: string) => `cephalopod://${space}/note/${id}`;
 function parseNoteUri(uri: string): { space: string; note: string } {
@@ -176,6 +177,9 @@ export function buildServer(client: CephalopodClient, opts: { socket?: BrainSock
       };
     },
   );
+
+  // ---- Prompts (03 §4.4): guided knowledge-capture workflows ----
+  registerPrompts(server, client);
 
   // ---- Live subscriptions (03 §4.3): notify when a watched note changes ----
   if (opts.socket) {

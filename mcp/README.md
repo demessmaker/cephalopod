@@ -20,6 +20,9 @@ one space.
 - ✅ **Live subscriptions** (`03 §4.3`): the server holds a WebSocket to the brain
   and emits `notifications/resources/updated` when a watched note changes — so a
   long-running agent can *watch* knowledge evolve.
+- ✅ **Prompts** (`03 §4.4`): `capture-decision` (write a well-formed `#decision`
+  note with related-decision links) and `onboard` (gather a service's 1-hop
+  subgraph and draft an onboarding summary) — dynamic, graph-aware prompts.
 
 ### Tools
 
