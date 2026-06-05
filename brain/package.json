@@ -6,6 +6,7 @@
   "description": "Phase-1 brain (M1): persistent sync relay — log, snapshots, spaces.",
   "scripts": {
     "start": "tsx src/server.ts",
+    "import": "tsx src/import-cli.ts",
     "test": "vitest run",
     "typecheck": "tsc --noEmit"
   },

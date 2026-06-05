@@ -20,13 +20,17 @@ HTTP API, full-text search, and token-based per-space access control.
 - ✅ **Full-text search** (SQLite FTS5) + tag facets (`03 §3`).
 - ✅ **Auth & RBAC** (`05 §1–2`) — principals (users + agents), hashed tokens,
   per-space roles (viewer/editor/admin), enforced on **both HTTP and WS**.
+- ✅ **Obsidian vault importer** (`08`) — two-pass, idempotent, in-process bulk
+  import: files→notes, `[[wikilinks]]`→edges (id-rewrite + stubs), frontmatter→
+  tags/props, `![[embeds]]`→embeds edges, `cephalopod_id` write-back.
 
 ## Run
 
 ```bash
 npm install
-npm test                       # 12 tests: persistence/restart/snapshots/scope + HTTP/auth/search
+npm test                       # 18 tests: persistence/restart/snapshots/scope + HTTP/auth/search + import
 npm start                      # WS :7700 + HTTP :7701 (CEPH_DB, CEPH_PORT, CEPH_HTTP_PORT)
+npm run import -- <vault> --space eng --db ./brain.db   # import an Obsidian vault
 ```
 
 On first run the brain prints a **bootstrap admin token** (shown once). Use it as

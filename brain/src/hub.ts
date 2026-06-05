@@ -241,6 +241,9 @@ export class SpaceHub {
   hasNote(space: string, note: string): boolean {
     return !!this.store.getNode(space, note);
   }
+  ensureSpaceExists(space: string): void {
+    this.store.ensureSpace(space);
+  }
 
   private snapshot(space: string, note: string, st: DocState): void {
     this.store.saveSnapshot(space, note, Y.encodeStateAsUpdate(st.doc), st.lastSeq);
