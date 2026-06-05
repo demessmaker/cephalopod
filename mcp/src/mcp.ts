@@ -1,13 +1,22 @@
-// The Cephalopod MCP server: agent-facing tools over the brain API (03 §4.1).
-import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
+// The Cephalopod MCP server: agent-facing tools (03 §4.1), resources (§4.2), and
+// live subscriptions (§4.3) over the brain API.
+import { McpServer, ResourceTemplate } from "@modelcontextprotocol/sdk/server/mcp.js";
+import { SubscribeRequestSchema, UnsubscribeRequestSchema } from "@modelcontextprotocol/sdk/types.js";
 import { z } from "zod";
 import type { CephalopodClient } from "./client.js";
+import type { BrainSocket } from "./brainsocket.js";
+
+const noteUri = (space: string, id: string) => `cephalopod://${space}/note/${id}`;
+function parseNoteUri(uri: string): { space: string; note: string } {
+  const u = new URL(uri);
+  return { space: u.hostname, note: u.pathname.split("/").pop() ?? "" };
+}
 
 type ToolResult = { content: { type: "text"; text: string }[]; isError?: boolean };
 const ok = (data: unknown): ToolResult => ({ content: [{ type: "text", text: JSON.stringify(data, null, 2) }] });
 const fail = (message: string): ToolResult => ({ content: [{ type: "text", text: message }], isError: true });
 
-export function buildServer(client: CephalopodClient): McpServer {
+export function buildServer(client: CephalopodClient, opts: { socket?: BrainSocket } = {}): McpServer {
   const server = new McpServer({ name: "cephalopod", version: "0.1.0" });
 
   server.registerTool(
@@ -138,6 +147,53 @@ export function buildServer(client: CephalopodClient): McpServer {
     { description: "List the knowledge-graph spaces this agent can access.", inputSchema: {} },
     async () => ok((await client.listSpaces()).spaces),
   );
+
+  // ---- Resources (03 §4.2): notes as cephalopod://{space}/note/{id} ----
+  server.registerResource(
+    "note",
+    new ResourceTemplate("cephalopod://{space}/note/{id}", {
+      list: async () => {
+        const { notes } = await client.listNotes(100);
+        return {
+          resources: notes.map((n) => ({
+            uri: noteUri(client.space, n.id),
+            name: n.title || n.id,
+            mimeType: "text/markdown",
+          })),
+        };
+      },
+    }),
+    { title: "Note", description: "A knowledge-graph note as markdown" },
+    async (uri, vars) => {
+      const note = await client.getNote(String(vars.id));
+      return {
+        contents: [{ uri: uri.href, mimeType: "text/markdown", text: `# ${note.title}\n\n${note.body}` }],
+      };
+    },
+  );
+
+  // ---- Live subscriptions (03 §4.3): notify when a watched note changes ----
+  if (opts.socket) {
+    const socket = opts.socket;
+    const watched = new Set<string>(); // resource URIs
+    server.server.registerCapabilities({ resources: { subscribe: true } });
+
+    server.server.setRequestHandler(SubscribeRequestSchema, async (req) => {
+      const { space, note } = parseNoteUri(req.params.uri);
+      socket.open(space, note); // start receiving the brain's fan-out for this note
+      watched.add(req.params.uri);
+      return {};
+    });
+    server.server.setRequestHandler(UnsubscribeRequestSchema, async (req) => {
+      watched.delete(req.params.uri);
+      return {};
+    });
+
+    socket.onUpdate((space, note) => {
+      const uri = noteUri(space, note);
+      if (watched.has(uri)) void server.server.sendResourceUpdated({ uri });
+    });
+  }
 
   return server;
 }

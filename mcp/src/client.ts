@@ -65,6 +65,9 @@ export class CephalopodClient {
   listSpaces(): Promise<{ spaces: { space: string; role: string }[] }> {
     return this.req("GET", `/spaces`);
   }
+  listNotes(limit = 50): Promise<{ notes: NodeSummary[] }> {
+    return this.req("GET", this.s(`/notes?limit=${limit}`));
+  }
 
   // Accept a note id OR a title (03 §4 ergonomics). Returns the resolved id, or
   // undefined if a title matches nothing.

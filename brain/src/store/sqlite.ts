@@ -116,6 +116,13 @@ export class SqliteStore implements Store {
     const r = this.db.prepare("SELECT id, title, tags, stub FROM nodes WHERE space=? AND id=?").get(space, id) as any;
     return r ? { id: r.id, title: r.title, tags: JSON.parse(r.tags), stub: !!r.stub } : undefined;
   }
+  listNodes(space: string, limit: number): NodeSummary[] {
+    return (
+      this.db
+        .prepare("SELECT id, title, tags, stub FROM nodes WHERE space=? AND stub=0 ORDER BY rowid DESC LIMIT ?")
+        .all(space, limit) as any[]
+    ).map((r) => ({ id: r.id, title: r.title, tags: JSON.parse(r.tags), stub: !!r.stub }));
+  }
   findIdByTitle(space: string, titleLower: string): string | undefined {
     const r = this.db
       .prepare("SELECT id FROM nodes WHERE space=? AND lower(title)=? AND stub=0 LIMIT 1")

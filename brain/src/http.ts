@@ -81,6 +81,10 @@ export function createHttpServer(hub: SpaceHub, auth: Auth) {
     const id = hub.createNote(c.params.space, c.body ?? {}, c.body?.id);
     json(c.res, 201, { id });
   });
+  route("GET", "/spaces/:space/notes", (c) => {
+    if (!require(c, "read")) return;
+    json(c.res, 200, { notes: hub.listNotes(c.params.space, Number(c.url.searchParams.get("limit") ?? 50)) });
+  });
   route("GET", "/spaces/:space/notes/:id", (c) => {
     if (!require(c, "read")) return;
     if (!hub.hasNote(c.params.space, c.params.id)) return err(c.res, 404, "not found");

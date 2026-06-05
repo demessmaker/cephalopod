@@ -232,6 +232,9 @@ export class SpaceHub {
   tagCounts(space: string) {
     return this.store.tagCounts(space);
   }
+  listNotes(space: string, limit = 50): NodeSummary[] {
+    return this.store.listNodes(space, limit);
+  }
   neighbors(space: string, note: string, hops = 1, dir: "out" | "in" | "both" = "both") {
     return this.resolveScope(space, { focus: [note], hops, dir });
   }

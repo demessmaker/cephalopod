@@ -35,6 +35,7 @@ export interface Store {
   upsertNode(space: string, n: NodeSummary): void;
   deleteNode(space: string, id: string): void;
   getNode(space: string, id: string): NodeSummary | undefined;
+  listNodes(space: string, limit: number): NodeSummary[];
   findIdByTitle(space: string, titleLower: string): string | undefined;
   replaceEdgesFrom(space: string, from: string, edges: EdgeRec[]): void;
   edgesAdjacent(space: string, id: string, dir: "out" | "in" | "both"): EdgeRec[];
