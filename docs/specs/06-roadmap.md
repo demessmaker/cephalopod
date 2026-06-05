@@ -20,7 +20,8 @@ for proving the hard core (CRDT sync + agent surface) before any human UI.
 - HTTP Query/Command API (`03 §2`) with full-text search (PG FTS to start).
 - Spaces, roles, tokens (`05` §1–2).
 - **Obsidian vault importer**: map a markdown + `[[wikilink]]` vault into a space
-  (~1:1), so teams arrive with a populated graph (decided seeding path).
+  (~1:1), so teams arrive with a populated graph (decided seeding path) — full
+  spec in `08-obsidian-import.md`.
 - Single-tenant self-host packaging (Docker Compose) — `04 §6`, the decided v1
   deployment model.
 - **Exit criteria**: a CLI arm can cache a scope, edit offline, sync, and two
@@ -56,7 +57,7 @@ for proving the hard core (CRDT sync + agent surface) before any human UI.
 - [ ] M0 Convergence spike (2 replicas + relay, wikilink edges) — full spec in `07-phase0-spike.md`
 - [ ] M1 Relay + log + snapshots
 - [ ] M2 HTTP API + FTS + spaces/auth
-- [ ] M2.5 Obsidian vault importer + self-host packaging
+- [ ] M2.5 Obsidian vault importer (`08`) + self-host packaging
 - [ ] M3 CLI arm with offline cache + sync
 - [ ] M4 MCP server (tools + resources)
 - [ ] M5 Semantic search + hybrid ranking
@@ -76,6 +77,9 @@ for proving the hard core (CRDT sync + agent surface) before any human UI.
 | OQ-6 | E2E encryption vs server-side search/embeddings. | Default: server-readable (search wins); E2E later/optional. |
 | OQ-7 | Edge conflict semantics (add-wins vs remove-wins). | Default: add-wins, per-space configurable. |
 | OQ-8 | Multi-tenant SaaS vs self-host-first. | ✅ **Resolved: self-host-first** for v1; SaaS is a later repackaging (`04 §6`). |
+| OQ-9 | Map Obsidian Dataview inline fields (`key:: value`) to typed edges/props? | Default: no in v1; treat as text (`08 §9`). |
+| OQ-10 | Blob store backend for attachments. | Default: S3-compatible object store (`08 §9`, `04 §2.3`). |
+| OQ-11 | Import manifest location (in-vault vs server record). | Default: server record per space; optional in-vault copy (`08 §9`). |
 
 ## 4. Risks
 
