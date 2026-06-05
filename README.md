@@ -31,6 +31,7 @@ back to the central brain.
 | [04 — Architecture](docs/specs/04-architecture.md) | Components, storage, scaling, deployment. |
 | [05 — Security](docs/specs/05-security.md) | Auth, spaces, ACLs, attribution, agent trust. |
 | [06 — Roadmap](docs/specs/06-roadmap.md) | Phasing, milestones, open questions. |
+| [07 — Phase-0 Spike](docs/specs/07-phase0-spike.md) | The M0 convergence prototype: what it proves and how to build it. |
 
 Open questions and questions for the product owner are tracked in
 [the roadmap](docs/specs/06-roadmap.md#3-open-questions-tracked).

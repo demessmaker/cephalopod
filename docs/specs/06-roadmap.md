@@ -53,7 +53,7 @@ for proving the hard core (CRDT sync + agent surface) before any human UI.
 
 ## 2. Milestone checklist
 
-- [ ] M0 Convergence spike (2 replicas + relay, wikilink edges)
+- [ ] M0 Convergence spike (2 replicas + relay, wikilink edges) — full spec in `07-phase0-spike.md`
 - [ ] M1 Relay + log + snapshots
 - [ ] M2 HTTP API + FTS + spaces/auth
 - [ ] M2.5 Obsidian vault importer + self-host packaging
