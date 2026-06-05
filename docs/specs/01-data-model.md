@@ -84,6 +84,13 @@ Three ways a link comes into existence, all converging on the same edge model:
    sets the edge type. → `origin: "wikilink"`, `type: "depends_on"`.
 3. **Explicit / property link**: created via API/MCP (`link(from,to,type)`), or
    a note property whose value is a note-ref. → `origin: "explicit"|"property"`.
+4. **Code reference** (reserved, v1 = URL only): `[[code:: <url>]]` for a plain
+   source link, or `[[symbol:: pkg.Module.func]]` for a symbol. In v1 the target
+   is stored as an **external reference** — `props.href` (URL) and/or
+   `props.symbol` (string) on the edge — with **no live resolution**. The
+   `symbol::` form is reserved now so Phase-3 LSP indexing can later bind it to a
+   real definition (file+range at a commit) without a data-model change.
+   → `origin: "wikilink"`, `type: "code"`.
 
 Wikilinks are parsed from the CRDT text on every change; the derived edge set is
 reconciled into the graph index (see `02-crdt-sync.md §4`).

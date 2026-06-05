@@ -117,7 +117,10 @@ v1 ships the TS client everywhere and ports the daemon to Rust later (OQ-5).
 
 ## 6. Deployment
 
-- **Single-tenant self-host** (primary target for dev teams): one brain instance
+**v1 decision: self-host-first** (resolves OQ-8). v1 ships only the single-tenant
+path; the multi-tenant pieces below are designed-for but not built until later.
+
+- **Single-tenant self-host** (v1 target for dev teams): one brain instance
   per team/org; Postgres + object store + the services above, shippable via
   Docker Compose / Helm.
 - **Multi-tenant SaaS** (later): spaces are the isolation unit; relay and API are
