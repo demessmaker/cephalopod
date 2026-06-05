@@ -167,3 +167,45 @@ Derived edges:
 
 Backlink query on n_gateway returns e1 (incoming depends_on from Billing).
 ```
+
+## 7. Facets & optional structure (per-space)
+
+The global model stays freeform (no imposed schema). Teams that need structure —
+e.g. an agency where knowledge maps to a **client** and **project** — opt into it
+*per space*, without changing the model for anyone else. This is the concrete form
+of the "hybrid" schema choice.
+
+### 7.1 Facets are `key:value` tags
+
+A facet is just a `key:value` tag (`client:acme`, `project:billing-revamp`),
+already the model's faceting mechanism (§1.3). They are indexed, surfaced by
+`GET /tags`, and filterable on search/listing (`?tag=client:acme`).
+
+### 7.2 Required facets (opt-in, per space)
+
+A space may declare required facet **keys** (e.g. `["client","project"]`). The
+brain then rejects (HTTP 422) any note created/retagged without a tag for each
+required key. Two exemptions keep cross-cutting knowledge homeless-free:
+
+- a note tagged `shared` (a shared lib, infra runbook, onboarding doc), and
+- a note that *is* a facet node (tagged with the key itself, e.g. `#client`).
+
+Set via `PUT /v1/spaces/:s/settings { "requiredFacets": ["client","project"] }`.
+Spaces with no requirement behave exactly as before. Bulk import (e.g. Obsidian)
+bypasses validation — imports may legitimately be cross-cutting.
+
+### 7.3 Client / project as first-class nodes
+
+Clients and projects are **notes**, not a hardcoded type system: a `#client` note
+(`Acme`) and a `#project` note (`Billing Revamp`, tagged `client:acme`), joined by
+`belongs_to` edges (note → project → client). Because they are nodes you get
+rollups ("everything for Acme" = the client node's neighborhood), a place to hang
+context, scoped/graph-proximity search, and a future per-client ACL seam — all via
+convention, no schema engine.
+
+```
+#client  "Acme"
+#project "Billing Revamp"  tags:[project, client:acme]   --belongs_to--> Acme
+note     "Idempotent charges"  tags:[decision, client:acme, project:billing-revamp]
+           --belongs_to--> "Billing Revamp"
+```

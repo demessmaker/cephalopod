@@ -75,17 +75,24 @@ export function createHttpServer(hub: SpaceHub, auth: Auth) {
     json(c.res, 200, { ok: true });
   });
 
-  // per-space settings (agent write policy, 05 §4)
+  // per-space settings: agent write policy (05 §4) + required facets
   route("GET", "/spaces/:space/settings", (c) => {
     if (!require(c, "read")) return;
-    json(c.res, 200, { agentMode: hub.getAgentMode(c.params.space) });
+    json(c.res, 200, { agentMode: hub.getAgentMode(c.params.space), requiredFacets: hub.getRequiredFacets(c.params.space) });
   });
   route("PUT", "/spaces/:space/settings", (c) => {
     if (!require(c, "admin")) return;
-    const mode = c.body?.agentMode;
-    if (mode !== "draft" && mode !== "open") return err(c.res, 400, "agentMode must be draft|open");
-    hub.setAgentMode(c.params.space, mode);
-    json(c.res, 200, { agentMode: mode });
+    const { agentMode, requiredFacets } = c.body ?? {};
+    if (agentMode !== undefined) {
+      if (agentMode !== "draft" && agentMode !== "open") return err(c.res, 400, "agentMode must be draft|open");
+      hub.setAgentMode(c.params.space, agentMode);
+    }
+    if (requiredFacets !== undefined) {
+      if (!Array.isArray(requiredFacets) || requiredFacets.some((f) => typeof f !== "string"))
+        return err(c.res, 400, "requiredFacets must be a string[]");
+      hub.setRequiredFacets(c.params.space, requiredFacets);
+    }
+    json(c.res, 200, { agentMode: hub.getAgentMode(c.params.space), requiredFacets: hub.getRequiredFacets(c.params.space) });
   });
 
   // Draft-gate (05 §4): agent writes are provenance-stamped and, when the space
@@ -94,19 +101,31 @@ export function createHttpServer(hub: SpaceHub, auth: Auth) {
   const gated = (c: Ctx) => c.principal.kind === "agent" && hub.getAgentMode(c.params.space) === "draft";
   const stamp = (kind: string) => (kind === "agent" ? "agent" : "human");
 
+  // per-space required facets (e.g. client/project), with a #shared exemption
+  const facetError = (c: Ctx, tags: string[]): boolean => {
+    const miss = hub.missingFacets(c.params.space, tags);
+    if (miss.length) {
+      err(c.res, 422, `missing required facets: ${miss.join(", ")} — add tags like client:acme, or tag "shared" to exempt`);
+      return true;
+    }
+    return false;
+  };
+  const tagFilters = (c: Ctx) => c.url.searchParams.getAll("tag");
+
   // --- notes ---
   route("POST", "/spaces/:space/notes", (c) => {
     if (!require(c, "write")) return;
     const fields = { ...(c.body ?? {}) };
     fields.props = { ...(fields.props ?? {}), authoredBy: stamp(c.principal.kind) };
     if (gated(c)) fields.tags = [...new Set([...(fields.tags ?? []), DRAFT])];
+    if (facetError(c, fields.tags ?? [])) return;
     const id = hub.createNote(c.params.space, fields, c.body?.id);
     json(c.res, 201, { id, draft: gated(c) });
   });
   route("GET", "/spaces/:space/notes", (c) => {
     if (!require(c, "read")) return;
     const drafts = c.url.searchParams.get("drafts") === "1";
-    json(c.res, 200, { notes: hub.listNotes(c.params.space, Number(c.url.searchParams.get("limit") ?? 50), drafts) });
+    json(c.res, 200, { notes: hub.listNotes(c.params.space, Number(c.url.searchParams.get("limit") ?? 50), drafts, tagFilters(c)) });
   });
   route("GET", "/spaces/:space/notes/:id", (c) => {
     if (!require(c, "read")) return;
@@ -123,6 +142,7 @@ export function createHttpServer(hub: SpaceHub, auth: Auth) {
       if (patch.tags && !patch.tags.includes(DRAFT)) patch.tags = [...patch.tags, DRAFT]; // can't self-promote
       patch.props = { ...(patch.props ?? {}), authoredBy: "agent" };
     }
+    if (patch.tags !== undefined && facetError(c, patch.tags)) return; // enforce on explicit tag changes
     hub.patchNote(c.params.space, c.params.id, patch);
     json(c.res, 200, hub.getNoteSnapshot(c.params.space, c.params.id));
   });
@@ -174,7 +194,7 @@ export function createHttpServer(hub: SpaceHub, auth: Auth) {
     const limit = Number(c.url.searchParams.get("limit") ?? 20);
     const drafts = c.url.searchParams.get("drafts") === "1";
     const mode = (c.url.searchParams.get("mode") ?? "text") as "text" | "semantic" | "hybrid";
-    json(c.res, 200, { hits: q ? hub.searchMode(c.params.space, q, mode, limit, drafts) : [] });
+    json(c.res, 200, { hits: q ? hub.searchMode(c.params.space, q, mode, limit, drafts, tagFilters(c)) : [] });
   });
   route("GET", "/spaces/:space/tags", (c) => {
     if (!require(c, "read")) return;
@@ -187,8 +207,9 @@ export function createHttpServer(hub: SpaceHub, auth: Auth) {
     if (tr?.from) return json(c.res, 200, hub.neighbors(c.params.space, tr.from, tr.hops ?? 1, tr.dir ?? "both"));
     const limit = c.body?.limit ?? 20;
     const drafts = !!c.body?.includeDrafts;
-    if (m.semantic) return json(c.res, 200, { hits: hub.searchHybrid(c.params.space, m.semantic, limit, drafts) });
-    if (m.text) return json(c.res, 200, { hits: hub.search(c.params.space, m.text, limit, drafts) });
+    const tags: string[] = Array.isArray(m.tags) ? m.tags : [];
+    if (m.semantic) return json(c.res, 200, { hits: hub.searchHybrid(c.params.space, m.semantic, limit, drafts, tags) });
+    if (m.text) return json(c.res, 200, { hits: hub.search(c.params.space, m.text, limit, drafts, tags) });
     err(c.res, 400, "query needs match.text, match.semantic, or traverse.from");
   });
 

@@ -27,6 +27,10 @@ HTTP API, full-text search, and token-based per-space access control.
 - ✅ **Obsidian vault importer** (`08`) — two-pass, idempotent, in-process bulk
   import: files→notes, `[[wikilinks]]`→edges (id-rewrite + stubs), frontmatter→
   tags/props, `![[embeds]]`→embeds edges, `cephalopod_id` write-back.
+- ✅ **Per-space required facets** (`01 §7`) — a space can require `key:value`
+  facet tags (e.g. `client`, `project`) on every note (422 if missing), with a
+  `#shared`/facet-node exemption; search & listing filter by `?tag=client:acme`.
+  Client/project are first-class nodes by convention (`belongs_to`).
 - ✅ **Agent draft-gating** (`05 §4`) — writes are provenance-stamped
   (`props.authoredBy`); in a space's default `draft` mode, agent-authored notes
   are forced `#draft` and hidden from search/listing until a human **promotes**

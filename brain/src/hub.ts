@@ -229,16 +229,16 @@ export class SpaceHub {
     };
   }
 
-  search(space: string, query: string, limit = 20, includeDrafts = false): NodeSummary[] {
-    return this.nodesFor(space, this.store.search(space, query, limit, includeDrafts));
+  search(space: string, query: string, limit = 20, includeDrafts = false, tagFilters: string[] = []): NodeSummary[] {
+    return this.nodesFor(space, this.store.search(space, query, limit, includeDrafts, tagFilters));
   }
-  searchSemantic(space: string, query: string, limit = 20, includeDrafts = false): NodeSummary[] {
-    return this.nodesFor(space, this.store.searchSemantic(space, this.embedder.embed(query), limit, includeDrafts));
+  searchSemantic(space: string, query: string, limit = 20, includeDrafts = false, tagFilters: string[] = []): NodeSummary[] {
+    return this.nodesFor(space, this.semanticIds(space, query, limit, includeDrafts, tagFilters));
   }
   // Reciprocal-rank fusion of lexical (FTS) + semantic (vector) results (03 §3).
-  searchHybrid(space: string, query: string, limit = 20, includeDrafts = false): NodeSummary[] {
-    const lex = this.store.search(space, query, limit * 2, includeDrafts);
-    const sem = this.store.searchSemantic(space, this.embedder.embed(query), limit * 2, includeDrafts);
+  searchHybrid(space: string, query: string, limit = 20, includeDrafts = false, tagFilters: string[] = []): NodeSummary[] {
+    const lex = this.store.search(space, query, limit * 2, includeDrafts, tagFilters);
+    const sem = this.semanticIds(space, query, limit * 2, includeDrafts, tagFilters);
     const K = 60;
     const score = new Map<string, number>();
     const fuse = (ids: string[]) => ids.forEach((id, i) => score.set(id, (score.get(id) ?? 0) + 1 / (K + i)));
@@ -247,10 +247,20 @@ export class SpaceHub {
     const ranked = [...score.entries()].sort((a, b) => b[1] - a[1]).slice(0, limit).map((e) => e[0]);
     return this.nodesFor(space, ranked);
   }
-  searchMode(space: string, query: string, mode: SearchMode, limit = 20, includeDrafts = false): NodeSummary[] {
-    if (mode === "semantic") return this.searchSemantic(space, query, limit, includeDrafts);
-    if (mode === "hybrid") return this.searchHybrid(space, query, limit, includeDrafts);
-    return this.search(space, query, limit, includeDrafts);
+  searchMode(space: string, query: string, mode: SearchMode, limit = 20, includeDrafts = false, tagFilters: string[] = []): NodeSummary[] {
+    if (mode === "semantic") return this.searchSemantic(space, query, limit, includeDrafts, tagFilters);
+    if (mode === "hybrid") return this.searchHybrid(space, query, limit, includeDrafts, tagFilters);
+    return this.search(space, query, limit, includeDrafts, tagFilters);
+  }
+  // vector ids, post-filtered by facet tags (the store's vector scan has no tag clause)
+  private semanticIds(space: string, query: string, limit: number, includeDrafts: boolean, tagFilters: string[]): string[] {
+    const raw = this.store.searchSemantic(space, this.embedder.embed(query), tagFilters.length ? limit * 10 : limit, includeDrafts);
+    if (!tagFilters.length) return raw;
+    return raw
+      .map((id) => this.store.getNode(space, id))
+      .filter((n) => n && tagFilters.every((t) => n.tags.includes(t)))
+      .slice(0, limit)
+      .map((n) => n!.id);
   }
   private nodesFor(space: string, ids: string[]): NodeSummary[] {
     return ids.map((id) => this.store.getNode(space, id)).filter(Boolean) as NodeSummary[];
@@ -258,14 +268,27 @@ export class SpaceHub {
   tagCounts(space: string) {
     return this.store.tagCounts(space);
   }
-  listNotes(space: string, limit = 50, includeDrafts = false): NodeSummary[] {
-    return this.store.listNodes(space, limit, includeDrafts);
+  listNotes(space: string, limit = 50, includeDrafts = false, tagFilters: string[] = []): NodeSummary[] {
+    return this.store.listNodes(space, limit, includeDrafts, tagFilters);
   }
   getAgentMode(space: string) {
     return this.store.getAgentMode(space);
   }
   setAgentMode(space: string, mode: "draft" | "open") {
     this.store.setAgentMode(space, mode);
+  }
+  getRequiredFacets(space: string) {
+    return this.store.getRequiredFacets(space);
+  }
+  setRequiredFacets(space: string, facets: string[]) {
+    this.store.setRequiredFacets(space, facets);
+  }
+  // Which required facets a note (with these tags) is missing. Exempt if tagged
+  // `shared`, or if the note IS a facet node (tagged with a facet key itself).
+  missingFacets(space: string, tags: string[]): string[] {
+    const req = this.store.getRequiredFacets(space);
+    if (!req.length || tags.includes("shared") || req.some((k) => tags.includes(k))) return [];
+    return req.filter((key) => !tags.some((t) => t.startsWith(key + ":")));
   }
   neighbors(space: string, note: string, hops = 1, dir: "out" | "in" | "both" = "both") {
     return this.resolveScope(space, { focus: [note], hops, dir });

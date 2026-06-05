@@ -24,14 +24,15 @@ export function buildServer(client: CephalopodClient, opts: { socket?: BrainSock
     "search",
     {
       description:
-        "Search the team knowledge graph. mode: text (keyword), semantic (vector), or hybrid (both, recommended for fuzzy recall). Returns ranked notes.",
+        "Search the team knowledge graph. mode: text (keyword), semantic (vector), or hybrid (both, recommended for fuzzy recall). Filter by facet tags (e.g. [\"client:acme\",\"project:billing\"]). Returns ranked notes.",
       inputSchema: {
         query: z.string(),
         limit: z.number().int().positive().optional(),
         mode: z.enum(["text", "semantic", "hybrid"]).optional(),
+        tags: z.array(z.string()).optional(),
       },
     },
-    async ({ query, limit, mode }) => ok((await client.search(query, limit ?? 20, mode ?? "text")).hits),
+    async ({ query, limit, mode, tags }) => ok((await client.search(query, limit ?? 20, mode ?? "text", tags ?? [])).hits),
   );
 
   server.registerTool(

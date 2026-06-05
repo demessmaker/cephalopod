@@ -58,9 +58,15 @@ export class SqliteStore implements Store {
       CREATE TABLE IF NOT EXISTS tokens(hash TEXT PRIMARY KEY, principal_id TEXT);
       CREATE TABLE IF NOT EXISTS memberships(
         space TEXT, principal_id TEXT, role TEXT, PRIMARY KEY(space, principal_id));
-      CREATE TABLE IF NOT EXISTS space_settings(space TEXT PRIMARY KEY, agent_mode TEXT);
+      CREATE TABLE IF NOT EXISTS space_settings(space TEXT PRIMARY KEY, agent_mode TEXT, required_facets TEXT);
       CREATE TABLE IF NOT EXISTS embeddings(space TEXT, id TEXT, vec BLOB, PRIMARY KEY(space, id));
     `);
+    // migrate older DBs that predate required_facets
+    try {
+      this.db.exec("ALTER TABLE space_settings ADD COLUMN required_facets TEXT");
+    } catch {
+      /* column already exists */
+    }
   }
 
   ensureSpace(space: string): void {
@@ -119,12 +125,13 @@ export class SqliteStore implements Store {
     const r = this.db.prepare("SELECT id, title, tags, stub FROM nodes WHERE space=? AND id=?").get(space, id) as any;
     return r ? { id: r.id, title: r.title, tags: JSON.parse(r.tags), stub: !!r.stub } : undefined;
   }
-  listNodes(space: string, limit: number, includeDrafts: boolean): NodeSummary[] {
+  listNodes(space: string, limit: number, includeDrafts: boolean, tagFilters: string[] = []): NodeSummary[] {
     const draftClause = includeDrafts ? "" : `AND tags NOT LIKE '%"draft"%'`;
+    const tagClause = tagFilters.map(() => "AND tags LIKE ?").join(" ");
     return (
       this.db
-        .prepare(`SELECT id, title, tags, stub FROM nodes WHERE space=? AND stub=0 ${draftClause} ORDER BY rowid DESC LIMIT ?`)
-        .all(space, limit) as any[]
+        .prepare(`SELECT id, title, tags, stub FROM nodes WHERE space=? AND stub=0 ${draftClause} ${tagClause} ORDER BY rowid DESC LIMIT ?`)
+        .all(space, ...tagFilters.map((f) => `%"${f}"%`), limit) as any[]
     ).map((r) => ({ id: r.id, title: r.title, tags: JSON.parse(r.tags), stub: !!r.stub }));
   }
   findIdByTitle(space: string, titleLower: string): string | undefined {
@@ -169,18 +176,19 @@ export class SqliteStore implements Store {
   searchDelete(space: string, id: string): void {
     this.db.prepare("DELETE FROM notes_search WHERE space=? AND id=?").run(space, id);
   }
-  search(space: string, query: string, limit: number, includeDrafts: boolean): string[] {
-    // exclude #draft notes from discovery unless asked (05 §4)
+  search(space: string, query: string, limit: number, includeDrafts: boolean, tagFilters: string[] = []): string[] {
+    // exclude #draft notes from discovery unless asked (05 §4); filter by facet tags
     const draftClause = includeDrafts ? "" : `AND n.tags NOT LIKE '%"draft"%'`;
+    const tagClause = tagFilters.map(() => "AND n.tags LIKE ?").join(" ");
     return (
       this.db
         .prepare(
           `SELECT s.id AS id FROM notes_fts f
              JOIN notes_search s ON s.rowid=f.rowid
              JOIN nodes n ON n.space=s.space AND n.id=s.id
-           WHERE notes_fts MATCH ? AND s.space=? ${draftClause} ORDER BY rank LIMIT ?`,
+           WHERE notes_fts MATCH ? AND s.space=? ${draftClause} ${tagClause} ORDER BY rank LIMIT ?`,
         )
-        .all(query, space, limit) as any[]
+        .all(query, space, ...tagFilters.map((f) => `%"${f}"%`), limit) as any[]
     ).map((r) => r.id);
   }
   upsertEmbedding(space: string, id: string, vec: Float32Array): void {
@@ -263,6 +271,18 @@ export class SqliteStore implements Store {
          ON CONFLICT(space) DO UPDATE SET agent_mode=excluded.agent_mode`,
       )
       .run(space, mode);
+  }
+  getRequiredFacets(space: string): string[] {
+    const r = this.db.prepare("SELECT required_facets FROM space_settings WHERE space=?").get(space) as any;
+    return r?.required_facets ? JSON.parse(r.required_facets) : [];
+  }
+  setRequiredFacets(space: string, facets: string[]): void {
+    this.db
+      .prepare(
+        `INSERT INTO space_settings(space, required_facets) VALUES (?,?)
+         ON CONFLICT(space) DO UPDATE SET required_facets=excluded.required_facets`,
+      )
+      .run(space, JSON.stringify(facets));
   }
 
   close(): void {

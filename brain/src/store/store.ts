@@ -35,7 +35,7 @@ export interface Store {
   upsertNode(space: string, n: NodeSummary): void;
   deleteNode(space: string, id: string): void;
   getNode(space: string, id: string): NodeSummary | undefined;
-  listNodes(space: string, limit: number, includeDrafts: boolean): NodeSummary[];
+  listNodes(space: string, limit: number, includeDrafts: boolean, tagFilters: string[]): NodeSummary[];
   findIdByTitle(space: string, titleLower: string): string | undefined;
   replaceEdgesFrom(space: string, from: string, edges: EdgeRec[]): void;
   edgesAdjacent(space: string, id: string, dir: "out" | "in" | "both"): EdgeRec[];
@@ -43,7 +43,7 @@ export interface Store {
   // --- full-text search (FTS5) + tags ---
   searchUpsert(space: string, id: string, title: string, body: string): void;
   searchDelete(space: string, id: string): void;
-  search(space: string, query: string, limit: number, includeDrafts: boolean): string[]; // ranked ids
+  search(space: string, query: string, limit: number, includeDrafts: boolean, tagFilters: string[]): string[]; // ranked ids
   tagCounts(space: string): { tag: string; count: number }[];
 
   // --- vector / semantic search (03 §3) ---
@@ -51,9 +51,11 @@ export interface Store {
   deleteEmbedding(space: string, id: string): void;
   searchSemantic(space: string, query: Float32Array, limit: number, includeDrafts: boolean): string[]; // ranked ids
 
-  // --- per-space settings (05 §4: agent write policy) ---
-  getAgentMode(space: string): "draft" | "open";
+  // --- per-space settings ---
+  getAgentMode(space: string): "draft" | "open"; // 05 §4 agent write policy
   setAgentMode(space: string, mode: "draft" | "open"): void;
+  getRequiredFacets(space: string): string[]; // required tag-key facets (e.g. client, project)
+  setRequiredFacets(space: string, facets: string[]): void;
 
   // --- principals, tokens, roles (05 §1–2) ---
   addPrincipal(p: Principal): void;
