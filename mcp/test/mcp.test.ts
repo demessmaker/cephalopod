@@ -39,6 +39,7 @@ beforeAll(async () => {
   const agentToken = auth.issueToken(agent.id);
   auth.setRole("eng", agent.id, "editor");
   auth.setRole("eng", admin.principal.id, "admin");
+  store.setAgentMode("eng", "open"); // these tests exercise tools, not draft-gating
   httpServer = createHttpServer(hub, auth);
   await new Promise<void>((r) => httpServer.listen(0, r));
   const port = (httpServer.address() as any).port;

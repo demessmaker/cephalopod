@@ -35,7 +35,7 @@ export interface Store {
   upsertNode(space: string, n: NodeSummary): void;
   deleteNode(space: string, id: string): void;
   getNode(space: string, id: string): NodeSummary | undefined;
-  listNodes(space: string, limit: number): NodeSummary[];
+  listNodes(space: string, limit: number, includeDrafts: boolean): NodeSummary[];
   findIdByTitle(space: string, titleLower: string): string | undefined;
   replaceEdgesFrom(space: string, from: string, edges: EdgeRec[]): void;
   edgesAdjacent(space: string, id: string, dir: "out" | "in" | "both"): EdgeRec[];
@@ -43,8 +43,12 @@ export interface Store {
   // --- full-text search (FTS5) + tags ---
   searchUpsert(space: string, id: string, title: string, body: string): void;
   searchDelete(space: string, id: string): void;
-  search(space: string, query: string, limit: number): string[]; // ranked note ids
+  search(space: string, query: string, limit: number, includeDrafts: boolean): string[]; // ranked ids
   tagCounts(space: string): { tag: string; count: number }[];
+
+  // --- per-space settings (05 §4: agent write policy) ---
+  getAgentMode(space: string): "draft" | "open";
+  setAgentMode(space: string, mode: "draft" | "open"): void;
 
   // --- principals, tokens, roles (05 §1–2) ---
   addPrincipal(p: Principal): void;

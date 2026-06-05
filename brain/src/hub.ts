@@ -223,17 +223,23 @@ export class SpaceHub {
     };
   }
 
-  search(space: string, query: string, limit = 20): NodeSummary[] {
+  search(space: string, query: string, limit = 20, includeDrafts = false): NodeSummary[] {
     return this.store
-      .search(space, query, limit)
+      .search(space, query, limit, includeDrafts)
       .map((id) => this.store.getNode(space, id))
       .filter(Boolean) as NodeSummary[];
   }
   tagCounts(space: string) {
     return this.store.tagCounts(space);
   }
-  listNotes(space: string, limit = 50): NodeSummary[] {
-    return this.store.listNodes(space, limit);
+  listNotes(space: string, limit = 50, includeDrafts = false): NodeSummary[] {
+    return this.store.listNodes(space, limit, includeDrafts);
+  }
+  getAgentMode(space: string) {
+    return this.store.getAgentMode(space);
+  }
+  setAgentMode(space: string, mode: "draft" | "open") {
+    this.store.setAgentMode(space, mode);
   }
   neighbors(space: string, note: string, hops = 1, dir: "out" | "in" | "both" = "both") {
     return this.resolveScope(space, { focus: [note], hops, dir });

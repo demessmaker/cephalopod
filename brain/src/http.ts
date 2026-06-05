@@ -75,15 +75,38 @@ export function createHttpServer(hub: SpaceHub, auth: Auth) {
     json(c.res, 200, { ok: true });
   });
 
+  // per-space settings (agent write policy, 05 §4)
+  route("GET", "/spaces/:space/settings", (c) => {
+    if (!require(c, "read")) return;
+    json(c.res, 200, { agentMode: hub.getAgentMode(c.params.space) });
+  });
+  route("PUT", "/spaces/:space/settings", (c) => {
+    if (!require(c, "admin")) return;
+    const mode = c.body?.agentMode;
+    if (mode !== "draft" && mode !== "open") return err(c.res, 400, "agentMode must be draft|open");
+    hub.setAgentMode(c.params.space, mode);
+    json(c.res, 200, { agentMode: mode });
+  });
+
+  // Draft-gate (05 §4): agent writes are provenance-stamped and, when the space
+  // is in "draft" mode, forced to #draft; agents may only touch their own drafts.
+  const DRAFT = "draft";
+  const gated = (c: Ctx) => c.principal.kind === "agent" && hub.getAgentMode(c.params.space) === "draft";
+  const stamp = (kind: string) => (kind === "agent" ? "agent" : "human");
+
   // --- notes ---
   route("POST", "/spaces/:space/notes", (c) => {
     if (!require(c, "write")) return;
-    const id = hub.createNote(c.params.space, c.body ?? {}, c.body?.id);
-    json(c.res, 201, { id });
+    const fields = { ...(c.body ?? {}) };
+    fields.props = { ...(fields.props ?? {}), authoredBy: stamp(c.principal.kind) };
+    if (gated(c)) fields.tags = [...new Set([...(fields.tags ?? []), DRAFT])];
+    const id = hub.createNote(c.params.space, fields, c.body?.id);
+    json(c.res, 201, { id, draft: gated(c) });
   });
   route("GET", "/spaces/:space/notes", (c) => {
     if (!require(c, "read")) return;
-    json(c.res, 200, { notes: hub.listNotes(c.params.space, Number(c.url.searchParams.get("limit") ?? 50)) });
+    const drafts = c.url.searchParams.get("drafts") === "1";
+    json(c.res, 200, { notes: hub.listNotes(c.params.space, Number(c.url.searchParams.get("limit") ?? 50), drafts) });
   });
   route("GET", "/spaces/:space/notes/:id", (c) => {
     if (!require(c, "read")) return;
@@ -93,7 +116,22 @@ export function createHttpServer(hub: SpaceHub, auth: Auth) {
   route("PATCH", "/spaces/:space/notes/:id", (c) => {
     if (!require(c, "write")) return;
     if (!hub.hasNote(c.params.space, c.params.id)) return err(c.res, 404, "not found");
-    hub.patchNote(c.params.space, c.params.id, c.body ?? {});
+    const patch = { ...(c.body ?? {}) };
+    if (gated(c)) {
+      const cur = hub.getNoteSnapshot(c.params.space, c.params.id);
+      if (!cur.tags.includes(DRAFT)) return err(c.res, 403, "agents may only edit #draft notes");
+      if (patch.tags && !patch.tags.includes(DRAFT)) patch.tags = [...patch.tags, DRAFT]; // can't self-promote
+      patch.props = { ...(patch.props ?? {}), authoredBy: "agent" };
+    }
+    hub.patchNote(c.params.space, c.params.id, patch);
+    json(c.res, 200, hub.getNoteSnapshot(c.params.space, c.params.id));
+  });
+  route("POST", "/spaces/:space/notes/:id/promote", (c) => {
+    if (!require(c, "write")) return;
+    if (c.principal.kind === "agent") return err(c.res, 403, "agents cannot promote drafts");
+    if (!hub.hasNote(c.params.space, c.params.id)) return err(c.res, 404, "not found");
+    const cur = hub.getNoteSnapshot(c.params.space, c.params.id);
+    hub.patchNote(c.params.space, c.params.id, { tags: cur.tags.filter((t) => t !== DRAFT) });
     json(c.res, 200, hub.getNoteSnapshot(c.params.space, c.params.id));
   });
   route("DELETE", "/spaces/:space/notes/:id", (c) => {
@@ -134,7 +172,8 @@ export function createHttpServer(hub: SpaceHub, auth: Auth) {
     if (!require(c, "read")) return;
     const q = c.url.searchParams.get("q") ?? "";
     const limit = Number(c.url.searchParams.get("limit") ?? 20);
-    json(c.res, 200, { hits: q ? hub.search(c.params.space, q, limit) : [] });
+    const drafts = c.url.searchParams.get("drafts") === "1";
+    json(c.res, 200, { hits: q ? hub.search(c.params.space, q, limit, drafts) : [] });
   });
   route("GET", "/spaces/:space/tags", (c) => {
     if (!require(c, "read")) return;
@@ -145,7 +184,7 @@ export function createHttpServer(hub: SpaceHub, auth: Auth) {
     const m = c.body?.match ?? {};
     const tr = c.body?.traverse;
     if (tr?.from) return json(c.res, 200, hub.neighbors(c.params.space, tr.from, tr.hops ?? 1, tr.dir ?? "both"));
-    if (m.text) return json(c.res, 200, { hits: hub.search(c.params.space, m.text, c.body?.limit ?? 20) });
+    if (m.text) return json(c.res, 200, { hits: hub.search(c.params.space, m.text, c.body?.limit ?? 20, !!c.body?.includeDrafts) });
     err(c.res, 400, "query needs match.text or traverse.from");
   });
 

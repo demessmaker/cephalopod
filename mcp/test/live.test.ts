@@ -35,6 +35,7 @@ beforeAll(async () => {
   const agent = auth.createPrincipal("agent", "watcher");
   const token = auth.issueToken(agent.id);
   auth.setRole("eng", agent.id, "editor");
+  store.setAgentMode("eng", "open"); // exercise resources/subscriptions, not draft-gating
 
   httpServer = createHttpServer(hub, auth);
   await new Promise<void>((r) => httpServer.listen(0, r));

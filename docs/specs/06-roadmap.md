@@ -63,7 +63,7 @@ for proving the hard core (CRDT sync + agent surface) before any human UI.
 - [x] M4 MCP server (tools) — code in `/mcp` (✅ 9 agent tools over the brain API)
 - [x] M4.1 MCP resources + live subscriptions — code in `/mcp` (✅ note resources + `resources/updated` notifications via a brain WS socket). Prompts still TODO.
 - [ ] M5 Semantic search + hybrid ranking
-- [ ] M6 Agent capabilities + provenance + draft-gate-by-default
+- [x] M6 Agent provenance + draft-gate-by-default — code in `/brain` (✅ agent writes stamped + forced #draft, hidden from discovery, human-promote, per-space opt-out)
 - [ ] M7 Index partitioning + relay scaling
 - [ ] M8 Web explorer/editor (north star)
 

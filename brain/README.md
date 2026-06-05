@@ -23,6 +23,10 @@ HTTP API, full-text search, and token-based per-space access control.
 - ✅ **Obsidian vault importer** (`08`) — two-pass, idempotent, in-process bulk
   import: files→notes, `[[wikilinks]]`→edges (id-rewrite + stubs), frontmatter→
   tags/props, `![[embeds]]`→embeds edges, `cephalopod_id` write-back.
+- ✅ **Agent draft-gating** (`05 §4`) — writes are provenance-stamped
+  (`props.authoredBy`); in a space's default `draft` mode, agent-authored notes
+  are forced `#draft` and hidden from search/listing until a human **promotes**
+  them. Agents may only edit their own drafts; a space can opt into `open` mode.
 
 ## Run
 
@@ -64,7 +68,9 @@ curl "localhost:7701/v1/spaces/eng/search?q=rollback" -H "Authorization: Bearer 
 | POST | `/principals` | any | create a user/agent principal + token |
 | GET/POST | `/spaces` | any | list memberships / create a space (creator = admin) |
 | POST | `/spaces/:s/members` | admin | grant a role |
-| POST/GET/PATCH/DELETE | `/spaces/:s/notes[/:id]` | write/read | note CRUD |
+| GET/PUT | `/spaces/:s/settings` | read/admin | get/set `agentMode` (`draft`\|`open`) |
+| POST/GET/PATCH/DELETE | `/spaces/:s/notes[/:id]` | write/read | note CRUD (agent writes → `#draft`) |
+| POST | `/spaces/:s/notes/:id/promote` | write (human) | publish an agent draft |
 | POST | `/spaces/:s/links`, `/unlink` | write | edges |
 | GET | `/spaces/:s/notes/:id/neighbors`, `/backlinks` | read | traversal |
 | GET | `/spaces/:s/search?q=`, `/tags` | read | full-text + facets |

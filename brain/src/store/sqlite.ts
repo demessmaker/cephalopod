@@ -57,6 +57,7 @@ export class SqliteStore implements Store {
       CREATE TABLE IF NOT EXISTS tokens(hash TEXT PRIMARY KEY, principal_id TEXT);
       CREATE TABLE IF NOT EXISTS memberships(
         space TEXT, principal_id TEXT, role TEXT, PRIMARY KEY(space, principal_id));
+      CREATE TABLE IF NOT EXISTS space_settings(space TEXT PRIMARY KEY, agent_mode TEXT);
     `);
   }
 
@@ -116,10 +117,11 @@ export class SqliteStore implements Store {
     const r = this.db.prepare("SELECT id, title, tags, stub FROM nodes WHERE space=? AND id=?").get(space, id) as any;
     return r ? { id: r.id, title: r.title, tags: JSON.parse(r.tags), stub: !!r.stub } : undefined;
   }
-  listNodes(space: string, limit: number): NodeSummary[] {
+  listNodes(space: string, limit: number, includeDrafts: boolean): NodeSummary[] {
+    const draftClause = includeDrafts ? "" : `AND tags NOT LIKE '%"draft"%'`;
     return (
       this.db
-        .prepare("SELECT id, title, tags, stub FROM nodes WHERE space=? AND stub=0 ORDER BY rowid DESC LIMIT ?")
+        .prepare(`SELECT id, title, tags, stub FROM nodes WHERE space=? AND stub=0 ${draftClause} ORDER BY rowid DESC LIMIT ?`)
         .all(space, limit) as any[]
     ).map((r) => ({ id: r.id, title: r.title, tags: JSON.parse(r.tags), stub: !!r.stub }));
   }
@@ -165,12 +167,16 @@ export class SqliteStore implements Store {
   searchDelete(space: string, id: string): void {
     this.db.prepare("DELETE FROM notes_search WHERE space=? AND id=?").run(space, id);
   }
-  search(space: string, query: string, limit: number): string[] {
+  search(space: string, query: string, limit: number, includeDrafts: boolean): string[] {
+    // exclude #draft notes from discovery unless asked (05 §4)
+    const draftClause = includeDrafts ? "" : `AND n.tags NOT LIKE '%"draft"%'`;
     return (
       this.db
         .prepare(
-          `SELECT s.id AS id FROM notes_fts f JOIN notes_search s ON s.rowid=f.rowid
-           WHERE notes_fts MATCH ? AND s.space=? ORDER BY rank LIMIT ?`,
+          `SELECT s.id AS id FROM notes_fts f
+             JOIN notes_search s ON s.rowid=f.rowid
+             JOIN nodes n ON n.space=s.space AND n.id=s.id
+           WHERE notes_fts MATCH ? AND s.space=? ${draftClause} ORDER BY rank LIMIT ?`,
         )
         .all(query, space, limit) as any[]
     ).map((r) => r.id);
@@ -216,6 +222,19 @@ export class SqliteStore implements Store {
     return (this.db.prepare("SELECT space, role FROM memberships WHERE principal_id=?").all(principalId) as any[]).map(
       (r) => ({ space: r.space, role: r.role }),
     );
+  }
+
+  getAgentMode(space: string): "draft" | "open" {
+    const r = this.db.prepare("SELECT agent_mode FROM space_settings WHERE space=?").get(space) as any;
+    return r?.agent_mode === "open" ? "open" : "draft"; // draft-gate by default
+  }
+  setAgentMode(space: string, mode: "draft" | "open"): void {
+    this.db
+      .prepare(
+        `INSERT INTO space_settings(space, agent_mode) VALUES (?,?)
+         ON CONFLICT(space) DO UPDATE SET agent_mode=excluded.agent_mode`,
+      )
+      .run(space, mode);
   }
 
   close(): void {
