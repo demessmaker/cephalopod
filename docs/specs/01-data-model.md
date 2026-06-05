@@ -121,6 +121,12 @@ So the same logical link created concurrently on two replicas produces the same
 edge id and merges to one edge (no duplicates). Explicit edges may instead carry
 a generated `e_` ULID when intentional multiplicity is desired.
 
+**Where edges are stored.** Explicit edges live in the *source* note's CRDT doc
+(`outLinks`, `02 §2.1`) so they sync conflict-free with that note; wikilink edges
+are derived from the body and not stored separately. The whole-space queryable
+adjacency (incl. backlinks) is a server-derived index, not synced state
+(`02 §2.2`).
+
 ## 3. Markdown & embedded structure
 
 - Body is **CommonMark + GFM**, with two Cephalopod extensions:

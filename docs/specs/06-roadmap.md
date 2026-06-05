@@ -7,14 +7,16 @@ for proving the hard core (CRDT sync + agent surface) before any human UI.
 
 ### Phase 0 — Spec & prototype (this repo, now)
 - These specs.
-- Spike: Yjs per-note doc + graph-index doc, two Node replicas syncing through a
-  trivial relay, wikilink→edge reconciliation. Prove convergence + subgraph
-  caching end-to-end with no UI.
+- Spike: Yjs per-note docs (body + `outLinks`), two Node replicas syncing through
+  a trivial relay that maintains a server-derived adjacency, wikilink→edge
+  reconciliation. Prove convergence + lazy-neighborhood scope fetch with no UI.
 
 ### Phase 1 — The brain (MVP)
 - Sync Relay (WebSocket, ACL on subscribe/update), append-only log + snapshots on
   Postgres.
-- Per-note + graph-index CRDT model (`02`), single index doc per space.
+- Per-note CRDT model with edges on the source note (`02 §2.1`), plus a
+  **server-derived graph index** (Postgres) and **lazy-neighborhood scope
+  resolution** — no monolithic index doc (required by the ~250k-note target).
 - HTTP Query/Command API (`03 §2`) with full-text search (PG FTS to start).
 - Spaces, roles, tokens (`05` §1–2).
 - **Obsidian vault importer**: map a markdown + `[[wikilink]]` vault into a space
@@ -35,8 +37,9 @@ for proving the hard core (CRDT sync + agent surface) before any human UI.
   until a human promotes them.
 
 ### Phase 3 — Scale & ergonomics
-- Graph-index partitioning / lazy neighborhoods (`02 §3.3`).
 - Relay horizontal scaling + sharding (`04 §6`).
+- Dedicated graph store if traversal latency demands it (OQ-4); index
+  partitioning beyond the single-Postgres read-model.
 - Native Rust dev daemon; richer CLI.
 - Dedicated graph/vector stores if needed (`04 §4`).
 - **Live code-symbol resolution**: bind reserved `[[symbol::]]` refs (`01 §2.1`)
@@ -66,7 +69,7 @@ for proving the hard core (CRDT sync + agent surface) before any human UI.
 | ID | Question | Status / decision |
 |----|----------|-------------------|
 | OQ-1 | Yjs vs Automerge for the CRDT core. | Default: Yjs (rich-text + ecosystem). |
-| OQ-2 | Graph-index partitioning strategy for large spaces. | Default: single doc up to **v1 target ~50k notes / ~50 concurrent editors per space**, then path-prefix shards. Revisit if real target is ≫ that. |
+| OQ-2 | Graph-index strategy for large spaces. | ✅ **Resolved** by the ~250k-note target: no monolithic index doc; **server-derived index (Postgres) + lazy-neighborhood scope resolution** (`02 §2.2`, `§3.3`). |
 | OQ-3 | Log retention / compaction policy & time-travel depth. | Default: keep full log; periodic snapshots; revisit cost. |
 | OQ-4 | When (if) to introduce a dedicated graph DB. | Default: relational adjacency until traversal latency demands it. |
 | OQ-5 | Native daemon language (TS vs Rust). | Default: TS first, Rust port in Phase 3. |
@@ -94,11 +97,20 @@ for proving the hard core (CRDT sync + agent surface) before any human UI.
 | 1 | **Deployment** — self-host vs SaaS. | ✅ Self-host-first; SaaS later (OQ-8, `04 §6`). |
 | 2 | **Agent autonomy** — free write vs review queue. | ✅ Draft-gate by default; per-space opt-out (`05 §4`). |
 | 3 | **Boundary with code** — URLs vs live symbols. | ✅ URLs only in v1; `[[symbol::]]` syntax reserved for Phase-3 LSP resolution (`01 §2.1`). |
-| 4 | **Scale target for v1.** | ⚙️ Planning default ~50k notes / ~50 concurrent editors per space (OQ-2) — confirm if your real target differs by an order of magnitude. |
+| 4 | **Scale target for v1.** | ✅ **~250k notes/space**, **~50 concurrent editors/space** (humans + agents), **~1–10 spaces / <100 users** per self-hosted brain, **agent load comparable to humans**. Drove the OQ-2 index redesign (`02 §2.2`). |
 | 5 | **Existing tools** — seed from imports vs clean. | ✅ Ship an Obsidian vault importer in v1 (Phase 1). |
 
-### Still genuinely open for input
-- **Scale (Q4)** is a *planning default*, not a confirmed requirement — give us
-  real numbers when you have them; it's the main driver of OQ-2.
+### Scale target — implications now baked into the specs
+- **~250k notes/space** → no monolithic index CRDT doc; server-derived index +
+  lazy-neighborhood resolution (`02 §2.2`, `§3.3`); Postgres adjacency required
+  from v1 (`04 §2.4`, `§4`).
+- **~50 concurrent editors/space** → a single relay instance suffices for v1;
+  horizontal relay sharding deferred to Phase 3.
+- **~1–10 spaces, <100 users/brain** → modest single-box self-host; Postgres +
+  services co-located is fine.
+- **Agent load ≈ human load** → plan steady agent QPS, draft-gate throughput, and
+  continuous embedding recompute in the indexer pipeline (`03 §3`, `05 §4`).
+
+### Still open (technical, non-blocking)
 - The remaining technical OQs (1, 3–7) have defaults above and can be revisited
   during Phase-0/1 implementation without re-litigating product direction.

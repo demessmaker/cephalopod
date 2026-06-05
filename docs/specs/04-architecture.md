@@ -59,9 +59,11 @@ logical brain per deployment (which may itself be horizontally scaled).
   for a minimal deployment.
 - **Vector**: pgvector (simplest, co-located with Postgres) or a dedicated store
   (Qdrant) at scale. Embeddings via a pluggable model endpoint.
-- **Graph**: maintains the queryable adjacency for `neighbors`/traversal. v1 can
-  serve traversal directly from the in-memory/SQL index; a dedicated graph store
-  (see §4) is a scale option.
+- **Graph**: maintains the queryable adjacency (nodes + edges + reverse edges for
+  backlinks) for `neighbors`/traversal/scope-resolution. **Required from v1** —
+  it is the only place the whole-space graph is queryable, since arms no longer
+  sync a monolithic index doc (`02 §2.2`). Built in Postgres for v1; a dedicated
+  graph store (see §4) is a later scale option (OQ-4).
 
 ### 2.5 Auth / Identity
 - Issues and validates tokens (users + agents), resolves them to identities used
@@ -87,14 +89,18 @@ All arms:
 
 The original idea framed this as a "remote graph database." Important nuance:
 
-- The **source of truth is the CRDT update log**, not a graph DB. The graph DB,
-  if any, is a *derived, rebuildable index* for fast traversal/query.
-- For v1, the graph index document (`02-crdt-sync.md §2.2`) plus a relational
-  adjacency table in Postgres is enough for `neighbors`/`query_graph` at team
-  scale (tens of thousands of notes per space).
-- **At scale**, swap the traversal index for a dedicated graph engine
-  (Neo4j / Memgraph / a Postgres+`pg_graphblas` approach) — without changing the
-  source of truth. This keeps options open (OQ-4).
+- The **source of truth is the per-note CRDT docs + update log**, not a graph DB.
+  The graph DB/index is a *derived, rebuildable* read-model for fast traversal.
+- **v1 sizing**: target ~250k notes/space and ~1M+ edges, across ~1–10 spaces per
+  self-hosted brain (<100 users). A relational adjacency in Postgres (a `nodes`
+  table + an `edges` table with a reverse index, proper indexes on
+  `from`/`to`/`type`/`tags`) comfortably serves `neighbors`/`query_graph` and
+  bounded N-hop traversal at this scale — recursive CTEs handle few-hop closures
+  fine for 1M-edge graphs.
+- **Where it strains**: deep/unbounded traversals or much larger graphs. Then
+  swap the traversal read-model for a dedicated graph engine (Neo4j / Memgraph /
+  Postgres + `pgRouting`/`pg_graphblas`) without touching the source of truth.
+  This is OQ-4 — deferred, not needed at the v1 target.
 
 So: CRDT log = truth; search/vector/graph stores = swappable read models. This is
 a CQRS-flavored split and is what makes the freeform-but-queryable goal tractable.
