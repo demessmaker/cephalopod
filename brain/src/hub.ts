@@ -3,9 +3,9 @@
 // the server-derived graph index, resolves lazy-neighborhood scopes, and fans
 // updates out to subscribed connections. Multi-space, with per-space isolation.
 import * as Y from "yjs";
-import { handle, getTitle } from "./core/note.js";
+import { handle, getTitle, type NoteHandle } from "./core/note.js";
 import { deriveEdges, type EdgeRec } from "./core/wikilinks.js";
-import { edgeId, stubId } from "./core/ids.js";
+import { edgeId, stubId, newNoteId } from "./core/ids.js";
 import {
   b64,
   docKey,
@@ -19,9 +19,35 @@ import {
 import type { Store } from "./store/store.js";
 
 type ServerConn = Conn<ServerMsg, ClientMsg>;
+
+// A connection's access policy (built from token -> principal -> role by the
+// ws-server; tests/internal callers use ALLOW_ALL).
+export interface ConnAuth {
+  canRead(space: string): boolean;
+  canWrite(space: string): boolean;
+}
+export const ALLOW_ALL: ConnAuth = { canRead: () => true, canWrite: () => true };
+
 interface ConnState {
   ch: ServerConn;
   open: Set<string>; // docKey()s this connection has open
+  auth: ConnAuth;
+}
+
+export interface NoteFields {
+  title?: string;
+  body?: string;
+  tags?: string[];
+  props?: Record<string, unknown>;
+}
+export interface NoteSnapshot {
+  id: string;
+  title: string;
+  body: string;
+  tags: string[];
+  props: Record<string, unknown>;
+  outLinks: { to: string; type: string | null }[];
+  deleted: boolean;
 }
 
 interface DocState {
@@ -43,8 +69,8 @@ export class SpaceHub {
     this.snapshotEvery = opts.snapshotEvery ?? 50;
   }
 
-  addConnection(ch: ServerConn): ConnState {
-    const conn: ConnState = { ch, open: new Set() };
+  addConnection(ch: ServerConn, auth: ConnAuth = ALLOW_ALL): ConnState {
+    const conn: ConnState = { ch, open: new Set(), auth };
     this.conns.add(conn);
     ch.onMessage((msg) => this.handle(conn, msg));
     return conn;
@@ -68,20 +94,28 @@ export class SpaceHub {
     return st;
   }
 
+  private deny(conn: ConnState, action: string, space: string): void {
+    conn.ch.send({ t: "error", code: "scope_denied", message: `not allowed to ${action} ${space}` });
+  }
+
   private handle(conn: ConnState, msg: ClientMsg): void {
+    // ACL: every read requires canRead(space); every write requires canWrite.
     switch (msg.t) {
       case "subscribe": {
+        if (!conn.auth.canRead(msg.space)) return this.deny(conn, "read", msg.space);
         const r = this.resolveScope(msg.space, msg.scope);
         conn.ch.send({ t: "slice", id: msg.id, ...r });
         break;
       }
       case "open": {
+        if (!conn.auth.canRead(msg.space)) return this.deny(conn, "read", msg.space);
         this.store.ensureSpace(msg.space);
         this.getDoc(msg.space, msg.note);
         conn.open.add(docKey(msg.space, msg.note));
         break;
       }
       case "sync1": {
+        if (!conn.auth.canRead(msg.space)) return this.deny(conn, "read", msg.space);
         const { doc } = this.getDoc(msg.space, msg.note);
         const diff = Y.encodeStateAsUpdate(doc, b64.dec(msg.sv));
         conn.ch.send({ t: "sync2", space: msg.space, note: msg.note, update: b64.enc(diff) });
@@ -90,10 +124,12 @@ export class SpaceHub {
       }
       case "sync2":
       case "update": {
+        if (!conn.auth.canWrite(msg.space)) return this.deny(conn, "write", msg.space);
         this.applyClientDelta(conn, msg.space, msg.note, b64.dec(msg.update), msg.update);
         break;
       }
       case "query": {
+        if (!conn.auth.canRead(msg.space)) return this.deny(conn, "read", msg.space);
         const r = this.runQuery(msg.space, msg.q);
         conn.ch.send({ t: "result", id: msg.id, ...r });
         break;
@@ -104,20 +140,106 @@ export class SpaceHub {
   private applyClientDelta(conn: ConnState, space: string, note: string, bytes: Uint8Array, raw: string): void {
     const st = this.getDoc(space, note);
     Y.applyUpdate(st.doc, bytes, conn); // origin = conn
-    // 1) durably log the delta (append-only, 04 §2.3)
-    st.lastSeq = this.store.appendUpdate(space, note, bytes);
-    // 2) refresh the derived index for this note
-    this.reindex(space, note, st.doc);
-    // 3) snapshot policy
-    if (++st.sinceSnap >= this.snapshotEvery) {
-      this.snapshot(space, note, st);
-    }
-    // 4) fan out the same bytes to other connections with this doc open
+    this.commit(space, note, st, bytes, raw, conn);
+  }
+
+  // Shared persist + index + snapshot + fan-out path for both WS deltas and
+  // server-side (HTTP/MCP) edits.
+  private commit(space: string, note: string, st: DocState, bytes: Uint8Array, raw: string, except?: ConnState): void {
+    st.lastSeq = this.store.appendUpdate(space, note, bytes); // append-only log (04 §2.3)
+    this.reindex(space, note, st.doc); // refresh derived index + FTS
+    if (++st.sinceSnap >= this.snapshotEvery) this.snapshot(space, note, st);
     const key = docKey(space, note);
     for (const other of this.conns) {
-      if (other === conn || !other.open.has(key)) continue;
+      if (other === except || !other.open.has(key)) continue;
       other.ch.send({ t: "update", space, note, update: raw });
     }
+  }
+
+  // Apply a server-side edit (HTTP/MCP) through the same write path as WS deltas,
+  // so all writers converge (02 §2.1). Captures the resulting CRDT update.
+  private applyLocalEdit(space: string, note: string, fn: (h: NoteHandle) => void): void {
+    const st = this.getDoc(space, note);
+    let captured: Uint8Array | null = null;
+    const onUpdate = (u: Uint8Array, origin: unknown) => {
+      if (origin === "http") captured = u;
+    };
+    st.doc.on("update", onUpdate);
+    st.doc.transact(() => fn(handle(note, st.doc)), "http");
+    st.doc.off("update", onUpdate);
+    if (captured) this.commit(space, note, st, captured, b64.enc(captured));
+  }
+
+  // ---- HTTP/MCP command surface (03 §2) ----------------------------------
+
+  createNote(space: string, fields: NoteFields, id = newNoteId()): string {
+    this.store.ensureSpace(space);
+    this.applyLocalEdit(space, id, (h) => {
+      h.meta.set("createdAt", new Date().toISOString());
+      if (fields.title !== undefined) h.meta.set("title", fields.title);
+      if (fields.body) h.body.insert(0, fields.body);
+      if (fields.tags) for (const t of fields.tags) h.tags.push([t]);
+      if (fields.props) for (const [k, v] of Object.entries(fields.props)) h.props.set(k, v);
+    });
+    return id;
+  }
+
+  patchNote(space: string, note: string, patch: NoteFields): void {
+    this.applyLocalEdit(space, note, (h) => {
+      if (patch.title !== undefined) h.meta.set("title", patch.title);
+      if (patch.body !== undefined) {
+        h.body.delete(0, h.body.length);
+        h.body.insert(0, patch.body);
+      }
+      if (patch.tags !== undefined) {
+        h.tags.delete(0, h.tags.length);
+        for (const t of patch.tags) h.tags.push([t]);
+      }
+      if (patch.props) for (const [k, v] of Object.entries(patch.props)) h.props.set(k, v);
+    });
+  }
+
+  deleteNote(space: string, note: string): void {
+    this.applyLocalEdit(space, note, (h) => h.meta.set("deleted", true));
+  }
+
+  linkNote(space: string, from: string, to: string, type: string | null = null): void {
+    this.applyLocalEdit(space, from, (h) => h.outLinks.set(edgeId(from, to, type), { to, type }));
+  }
+  unlinkNote(space: string, from: string, to: string, type: string | null = null): void {
+    this.applyLocalEdit(space, from, (h) => h.outLinks.delete(edgeId(from, to, type)));
+  }
+
+  getNoteSnapshot(space: string, note: string): NoteSnapshot {
+    const h = handle(note, this.getDoc(space, note).doc);
+    return {
+      id: note,
+      title: getTitle(h),
+      body: h.body.toString(),
+      tags: h.tags.toArray(),
+      props: Object.fromEntries(h.props.entries()),
+      outLinks: [...h.outLinks.values()].map((v) => ({ to: v.to, type: v.type ?? null })),
+      deleted: !!h.meta.get("deleted"),
+    };
+  }
+
+  search(space: string, query: string, limit = 20): NodeSummary[] {
+    return this.store
+      .search(space, query, limit)
+      .map((id) => this.store.getNode(space, id))
+      .filter(Boolean) as NodeSummary[];
+  }
+  tagCounts(space: string) {
+    return this.store.tagCounts(space);
+  }
+  neighbors(space: string, note: string, hops = 1, dir: "out" | "in" | "both" = "both") {
+    return this.resolveScope(space, { focus: [note], hops, dir });
+  }
+  backlinks(space: string, note: string) {
+    return this.runQuery(space, { note, kind: "backlinks" });
+  }
+  hasNote(space: string, note: string): boolean {
+    return !!this.store.getNode(space, note);
   }
 
   private snapshot(space: string, note: string, st: DocState): void {
@@ -153,14 +275,12 @@ export class SpaceHub {
     if (h.meta.get("deleted")) {
       this.store.deleteNode(space, note);
       this.store.replaceEdgesFrom(space, note, []);
+      this.store.searchDelete(space, note);
       return;
     }
-    this.store.upsertNode(space, {
-      id: note,
-      title: getTitle(h),
-      tags: h.tags.toArray(),
-      stub: !!h.meta.get("stub"),
-    });
+    const title = getTitle(h);
+    this.store.upsertNode(space, { id: note, title, tags: h.tags.toArray(), stub: !!h.meta.get("stub") });
+    this.store.searchUpsert(space, note, title, h.body.toString());
     const explicit: EdgeRec[] = [...h.outLinks.values()].map((v) => ({
       from: note,
       to: v.to,

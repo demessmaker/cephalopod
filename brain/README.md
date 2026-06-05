@@ -1,14 +1,14 @@
-# Cephalopod — Brain (Phase 1 / M1)
+# Cephalopod — Brain (Phase 1 / M1–M2)
 
 The persistent sync relay: an append-only update log, materialized snapshots,
-multi-space isolation, restart rehydration, and a server-derived graph index —
-graduated from the M0 spike into real code.
+multi-space isolation, restart rehydration, a server-derived graph index, plus an
+HTTP API, full-text search, and token-based per-space access control.
 
 > Specs: [`../docs/specs/02-crdt-sync.md`](../docs/specs/02-crdt-sync.md) (§2, §4),
 > [`04-architecture.md`](../docs/specs/04-architecture.md) (§2, §4),
 > [`06-roadmap.md`](../docs/specs/06-roadmap.md) (Phase 1 / M1).
 
-## Status — M1 done
+## Status — M1 + M2 done
 
 - ✅ Authoritative per-note Yjs docs, loaded lazily from **snapshot + log tail**.
 - ✅ **Append-only update log** (durable) + **periodic snapshots** with log compaction.
@@ -16,14 +16,41 @@ graduated from the M0 spike into real code.
 - ✅ **Multi-space** isolation.
 - ✅ **Server-derived graph index** persisted in the store (no monolithic CRDT
   index doc, `02 §2.2`): neighbors, backlinks, and bounded lazy-neighborhood scopes.
+- ✅ **HTTP Query/Command API** (`03 §2`) — notes CRUD, links, traversal, query.
+- ✅ **Full-text search** (SQLite FTS5) + tag facets (`03 §3`).
+- ✅ **Auth & RBAC** (`05 §1–2`) — principals (users + agents), hashed tokens,
+  per-space roles (viewer/editor/admin), enforced on **both HTTP and WS**.
 
 ## Run
 
 ```bash
 npm install
-npm test                       # 6 tests: persistence + restart + snapshots + scope
-npm start                      # ws://localhost:7700 (CEPH_DB=./brain.db CEPH_PORT=7700)
+npm test                       # 12 tests: persistence/restart/snapshots/scope + HTTP/auth/search
+npm start                      # WS :7700 + HTTP :7701 (CEPH_DB, CEPH_PORT, CEPH_HTTP_PORT)
 ```
+
+On first run the brain prints a **bootstrap admin token** (shown once). Use it as
+`Authorization: Bearer <token>`:
+
+```bash
+curl -X POST localhost:7701/v1/spaces -H "Authorization: Bearer $TOK" -d '{"name":"eng"}'
+curl -X POST localhost:7701/v1/spaces/eng/notes -H "Authorization: Bearer $TOK" \
+  -d '{"title":"Runbook","body":"rollback steps and [[Oncall]]","tags":["runbook"]}'
+curl "localhost:7701/v1/spaces/eng/search?q=rollback" -H "Authorization: Bearer $TOK"
+```
+
+### HTTP API (all under `/v1`, bearer token required)
+
+| Method | Path | Role | |
+|--------|------|------|--|
+| POST | `/principals` | any | create a user/agent principal + token |
+| GET/POST | `/spaces` | any | list memberships / create a space (creator = admin) |
+| POST | `/spaces/:s/members` | admin | grant a role |
+| POST/GET/PATCH/DELETE | `/spaces/:s/notes[/:id]` | write/read | note CRUD |
+| POST | `/spaces/:s/links`, `/unlink` | write | edges |
+| GET | `/spaces/:s/notes/:id/neighbors`, `/backlinks` | read | traversal |
+| GET | `/spaces/:s/search?q=`, `/tags` | read | full-text + facets |
+| POST | `/spaces/:s/query` | read | `{match:{text}}` or `{traverse:{from,hops}}` |
 
 ## Architecture
 
@@ -47,8 +74,9 @@ ws client ─┘                     │             ├─ updates  (append-onl
   scope resolution over the persisted index.
 - `src/server.ts` — the long-running brain; snapshots all docs on graceful shutdown.
 
-## What M1 deliberately does NOT include yet
+## Not yet (M3+)
 
-Auth/ACL, the HTTP query/command API, full-text & vector search, the MCP server,
-and the Obsidian importer — those are M2+ (see the roadmap). The relay currently
-trusts every connection; **do not expose it publicly** until M2 auth lands.
+The CLI arm (offline cache), the **MCP server** (agent-facing surface), semantic/
+vector search, capability-scoped agent tokens + draft-gating, and the Obsidian
+importer — see the roadmap. Note: WS connections without a valid `?token=` are
+denied all reads/writes; HTTP without a valid bearer token returns 401.

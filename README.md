@@ -25,7 +25,7 @@ back to the central brain.
 | Package | Milestone | What |
 |---------|-----------|------|
 | [`spike/`](spike/) | M0 ✅ | Convergence prototype — validated Yjs + lazy-neighborhood at 250k nodes. |
-| [`brain/`](brain/) | M1 ✅ | Persistent sync relay — append-only log, snapshots, spaces, restart rehydration, server-derived graph index. |
+| [`brain/`](brain/) | M1–M2 ✅ | Persistent sync relay (log, snapshots, spaces, restart, derived index) + HTTP API, FTS5 search, token auth & per-space RBAC. |
 
 ### Specs
 

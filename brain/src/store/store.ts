@@ -4,6 +4,14 @@
 import type { NodeSummary } from "../core/protocol.js";
 import type { EdgeRec } from "../core/wikilinks.js";
 
+export type Role = "viewer" | "editor" | "admin";
+
+export interface Principal {
+  id: string;
+  kind: "user" | "agent";
+  name: string;
+}
+
 export interface Snapshot {
   seq: number;
   state: Uint8Array;
@@ -30,6 +38,22 @@ export interface Store {
   findIdByTitle(space: string, titleLower: string): string | undefined;
   replaceEdgesFrom(space: string, from: string, edges: EdgeRec[]): void;
   edgesAdjacent(space: string, id: string, dir: "out" | "in" | "both"): EdgeRec[];
+
+  // --- full-text search (FTS5) + tags ---
+  searchUpsert(space: string, id: string, title: string, body: string): void;
+  searchDelete(space: string, id: string): void;
+  search(space: string, query: string, limit: number): string[]; // ranked note ids
+  tagCounts(space: string): { tag: string; count: number }[];
+
+  // --- principals, tokens, roles (05 §1–2) ---
+  addPrincipal(p: Principal): void;
+  getPrincipal(id: string): Principal | undefined;
+  addToken(hash: string, principalId: string): void;
+  principalIdByToken(hash: string): string | undefined;
+  principalCount(): number;
+  setRole(space: string, principalId: string, role: Role): void;
+  getRole(space: string, principalId: string): Role | undefined;
+  listMemberships(principalId: string): { space: string; role: Role }[];
 
   close(): void;
 }
