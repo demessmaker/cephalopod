@@ -40,15 +40,20 @@ Each note is its own CRDT document (`Y.Doc`), keyed by note `id`:
 | Field | CRDT type | Notes |
 |-------|-----------|-------|
 | `body` | `Y.XmlFragment` | rich-text (markdown ⇄ ProseMirror schema) |
-| `title` | `Y.Text` | short text |
 | `tags` | `Y.Array<string>` as a set | add/remove, dedup on read |
 | `props` | `Y.Map` | freeform key→value (LWW per key) |
 | `outLinks` | `Y.Map` | **explicit** outgoing edges keyed by edge id (§01-2.3) → `{ to, type, props }`; OR-Set semantics |
-| `meta` | `Y.Map` | createdAt/By, stub flag, etc. |
+| `meta` | `Y.Map` | `title` (LWW scalar), createdAt/By, stub flag, deleted, etc. |
 
-Concurrent edits to *different* fields merge cleanly; concurrent edits to the
-*same* scalar (e.g. two renames of `title`) resolve by Yjs's deterministic
-ordering (effectively last-writer-wins, but identical on all replicas).
+> **`title` is an LWW field in `meta`, NOT `Y.Text`** — a correction from the M0
+> spike (`07 §9`). `Y.Text` is a *sequence* CRDT: two concurrent renames
+> character-merge (`"Title-A"` + `"Title-B"` → `"Title-BTitle-A"`) rather than
+> picking a winner. Scalars that want last-writer-wins must live in a `Y.Map`.
+
+Concurrent edits to *different* fields merge cleanly. A scalar in a `Y.Map` (e.g.
+two renames of `meta.title`) resolves to a single deterministic last-writer-wins
+value, identical on all replicas. Concurrent edits within `body` (`Y.Text`)
+collaboratively merge — the desired behavior for prose.
 
 **Edges live with their source note.** Explicit edges (`link()` via API/MCP) are
 stored in the source note's `outLinks` map, so they sync conflict-free with the

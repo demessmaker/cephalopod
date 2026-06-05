@@ -75,13 +75,14 @@ Each note is a `Y.Doc`. Helper in `note.ts`:
 // A note id is a ULID string prefixed "n_". Edge ids per 01 §2.3.
 export interface NoteHandle {
   doc: Y.Doc;
-  title: Y.Text;            // doc.getText("title")
   body: Y.Text;            // doc.getText("body")  -- raw markdown (spike)
   tags: Y.Array<string>;   // doc.getArray("tags")
   props: Y.Map<unknown>;   // doc.getMap("props")
   outLinks: Y.Map<OutLink>;// doc.getMap("outLinks") -- explicit edges, OR-Set
-  meta: Y.Map<unknown>;    // doc.getMap("meta"): {createdAt, createdBy, deleted}
+  meta: Y.Map<unknown>;    // doc.getMap("meta"): {title (LWW), createdAt, createdBy, deleted}
 }
+// NOTE (M0 finding §9): title is an LWW key in `meta`, NOT a Y.Text — a Y.Text
+// title character-merges concurrent renames instead of last-writer-wins.
 
 export interface OutLink { to: string; type: string | null; props?: Record<string, unknown>; }
 
@@ -248,8 +249,21 @@ spike/
       in-memory artifact.
 - [ ] 9. Write up findings + decision-gate results → feeds Phase-1 go/no-go.
 
-## 12. Exit criteria
+## 12. Exit criteria — ✅ MET
 
-M0 is done when S1–S8 pass deterministically, the real-WebSocket smoke run
-converges, and the three measurements are recorded with a one-paragraph verdict
-on each decision gate in §9. That verdict is the Phase-1 green light.
+Implemented under [`/spike`](../../spike/) (see its README for run instructions
+and full results).
+
+- **S1–S8 pass deterministically** (vitest, in-process transport).
+- **Real-WebSocket smoke run converges** (`npm run smoke`).
+- **Measurements recorded** (`npm run gen`, `CEPH_SCALE=250000`):
+  24 B per 1-char edit; ~0.3 ms to derive a 20-link note; **1–2 ms** to resolve
+  a hops 2–3 scope over a **250k-node** graph (bounded slices).
+
+**Decision-gate verdict (§9):** all green — delta sizes tiny (Yjs stays, OQ-1),
+adjacency patches sub-ms, scope resolution bounded and fast at target scale
+(lazy-neighborhood validated, OQ-2; dedicated graph store not needed, OQ-4
+deferred). **One model correction surfaced and folded back:** `title` is an LWW
+`meta` field, not `Y.Text` (§5, `02 §2.1`).
+
+→ **Phase 1 green light.**
