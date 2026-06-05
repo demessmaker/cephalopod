@@ -20,7 +20,14 @@ back to the central brain.
 
 ## Status
 
-📋 **Spec phase.** No code yet — see [`docs/specs/`](docs/specs/).
+🔨 **Building.** Specs in [`docs/specs/`](docs/specs/); code under way:
+
+| Package | Milestone | What |
+|---------|-----------|------|
+| [`spike/`](spike/) | M0 ✅ | Convergence prototype — validated Yjs + lazy-neighborhood at 250k nodes. |
+| [`brain/`](brain/) | M1 ✅ | Persistent sync relay — append-only log, snapshots, spaces, restart rehydration, server-derived graph index. |
+
+### Specs
 
 | Spec | What it covers |
 |------|----------------|

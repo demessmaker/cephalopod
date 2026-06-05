@@ -1,0 +1,129 @@
+// SQLite store — the durable default for self-host-first v1 (04 §6). A Postgres
+// implementation of the same `Store` interface is the multi-tenant target later;
+// nothing above this file knows which backend is in use.
+import Database from "better-sqlite3";
+import { edgeId } from "../core/ids.js";
+import type { NodeSummary } from "../core/protocol.js";
+import type { EdgeRec } from "../core/wikilinks.js";
+import type { LoadedDoc, Snapshot, Store } from "./store.js";
+
+const buf = (u: Uint8Array) => Buffer.from(u.buffer, u.byteOffset, u.byteLength);
+const u8 = (b: Buffer) => new Uint8Array(b.buffer, b.byteOffset, b.byteLength);
+
+export class SqliteStore implements Store {
+  private db: Database.Database;
+
+  constructor(path = ":memory:") {
+    this.db = new Database(path);
+    this.db.pragma("journal_mode = WAL");
+    this.db.exec(`
+      CREATE TABLE IF NOT EXISTS spaces(name TEXT PRIMARY KEY);
+      CREATE TABLE IF NOT EXISTS updates(
+        seq INTEGER PRIMARY KEY AUTOINCREMENT,
+        space TEXT, note TEXT, update_blob BLOB);
+      CREATE INDEX IF NOT EXISTS updates_doc ON updates(space, note, seq);
+      CREATE TABLE IF NOT EXISTS snapshots(
+        space TEXT, note TEXT, seq INTEGER, state BLOB,
+        PRIMARY KEY(space, note));
+      CREATE TABLE IF NOT EXISTS nodes(
+        space TEXT, id TEXT, title TEXT, tags TEXT, stub INTEGER,
+        PRIMARY KEY(space, id));
+      CREATE INDEX IF NOT EXISTS nodes_title ON nodes(space, lower(title));
+      CREATE TABLE IF NOT EXISTS edges(
+        space TEXT, eid TEXT, frm TEXT, dst TEXT, type TEXT, origin TEXT,
+        PRIMARY KEY(space, eid));
+      CREATE INDEX IF NOT EXISTS edges_from ON edges(space, frm);
+      CREATE INDEX IF NOT EXISTS edges_to ON edges(space, dst);
+    `);
+  }
+
+  ensureSpace(space: string): void {
+    this.db.prepare("INSERT OR IGNORE INTO spaces(name) VALUES (?)").run(space);
+  }
+  listSpaces(): string[] {
+    return this.db.prepare("SELECT name FROM spaces ORDER BY name").all().map((r: any) => r.name);
+  }
+
+  appendUpdate(space: string, note: string, update: Uint8Array): number {
+    this.ensureSpace(space);
+    const info = this.db
+      .prepare("INSERT INTO updates(space, note, update_blob) VALUES (?,?,?)")
+      .run(space, note, buf(update));
+    return Number(info.lastInsertRowid);
+  }
+
+  loadDoc(space: string, note: string): LoadedDoc {
+    const snap = this.db
+      .prepare("SELECT seq, state FROM snapshots WHERE space=? AND note=?")
+      .get(space, note) as { seq: number; state: Buffer } | undefined;
+    const since = snap ? snap.seq : 0;
+    const rows = this.db
+      .prepare("SELECT update_blob FROM updates WHERE space=? AND note=? AND seq>? ORDER BY seq")
+      .all(space, note, since) as { update_blob: Buffer }[];
+    const snapshot: Snapshot | undefined = snap ? { seq: snap.seq, state: u8(snap.state) } : undefined;
+    return { snapshot, updates: rows.map((r) => u8(r.update_blob)) };
+  }
+
+  saveSnapshot(space: string, note: string, state: Uint8Array, seq: number): void {
+    const tx = this.db.transaction(() => {
+      this.db
+        .prepare(
+          `INSERT INTO snapshots(space, note, seq, state) VALUES (?,?,?,?)
+           ON CONFLICT(space, note) DO UPDATE SET seq=excluded.seq, state=excluded.state`,
+        )
+        .run(space, note, seq, buf(state));
+      // compaction: superseded log entries are now redundant (retention = OQ-3)
+      this.db.prepare("DELETE FROM updates WHERE space=? AND note=? AND seq<=?").run(space, note, seq);
+    });
+    tx();
+  }
+
+  upsertNode(space: string, n: NodeSummary): void {
+    this.db
+      .prepare(
+        `INSERT INTO nodes(space, id, title, tags, stub) VALUES (?,?,?,?,?)
+         ON CONFLICT(space, id) DO UPDATE SET title=excluded.title, tags=excluded.tags, stub=excluded.stub`,
+      )
+      .run(space, n.id, n.title, JSON.stringify(n.tags), n.stub ? 1 : 0);
+  }
+  deleteNode(space: string, id: string): void {
+    this.db.prepare("DELETE FROM nodes WHERE space=? AND id=?").run(space, id);
+  }
+  getNode(space: string, id: string): NodeSummary | undefined {
+    const r = this.db.prepare("SELECT id, title, tags, stub FROM nodes WHERE space=? AND id=?").get(space, id) as any;
+    return r ? { id: r.id, title: r.title, tags: JSON.parse(r.tags), stub: !!r.stub } : undefined;
+  }
+  findIdByTitle(space: string, titleLower: string): string | undefined {
+    const r = this.db
+      .prepare("SELECT id FROM nodes WHERE space=? AND lower(title)=? AND stub=0 LIMIT 1")
+      .get(space, titleLower) as any;
+    return r?.id;
+  }
+
+  replaceEdgesFrom(space: string, from: string, edges: EdgeRec[]): void {
+    const tx = this.db.transaction(() => {
+      this.db.prepare("DELETE FROM edges WHERE space=? AND frm=?").run(space, from);
+      const ins = this.db.prepare(
+        "INSERT OR REPLACE INTO edges(space, eid, frm, dst, type, origin) VALUES (?,?,?,?,?,?)",
+      );
+      for (const e of edges) ins.run(space, edgeId(e.from, e.to, e.type), e.from, e.to, e.type, e.origin);
+    });
+    tx();
+  }
+
+  edgesAdjacent(space: string, id: string, dir: "out" | "in" | "both"): EdgeRec[] {
+    const map = (r: any): EdgeRec => ({ from: r.frm, to: r.dst, type: r.type, origin: r.origin });
+    const out: EdgeRec[] = [];
+    if (dir === "out" || dir === "both") {
+      out.push(...(this.db.prepare("SELECT frm, dst, type, origin FROM edges WHERE space=? AND frm=?").all(space, id) as any[]).map(map));
+    }
+    if (dir === "in" || dir === "both") {
+      out.push(...(this.db.prepare("SELECT frm, dst, type, origin FROM edges WHERE space=? AND dst=?").all(space, id) as any[]).map(map));
+    }
+    return out;
+  }
+
+  close(): void {
+    this.db.close();
+  }
+}

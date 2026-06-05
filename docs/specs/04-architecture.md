@@ -112,7 +112,7 @@ a CQRS-flavored split and is what makes the freeform-but-queryable goal tractabl
 | CRDT | Yjs | rich-text maturity, ecosystem (`02-crdt-sync.md §1`) |
 | Sync transport | WebSocket (`y-websocket`-style protocol) | proven, multiplexable |
 | Server runtime | Node/TypeScript | shares Yjs + client types end-to-end |
-| Log + metadata | Postgres (+ object storage for cold log/snapshots) | boring, durable, transactional ACL |
+| Log + metadata | **SQLite for self-host v1** (M1 default), Postgres for multi-tenant | a `Store` interface abstracts the backend (see `/brain`); SQLite needs zero ops for single-tenant self-host (`§6`), Postgres is the scale/SaaS target |
 | Full-text | Meilisearch (or PG FTS for minimal) | fast, self-host |
 | Vector | pgvector → Qdrant at scale | start co-located, grow out |
 | MCP | TS MCP SDK | first-class agent surface |
