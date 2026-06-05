@@ -65,7 +65,7 @@ for proving the hard core (CRDT sync + agent surface) before any human UI.
 - [x] M5 Semantic search + hybrid ranking — code in `/brain` (✅ pluggable embedder, vector search, RRF hybrid; MCP `search` gains `mode`). Real-model embedder is a drop-in.
 - [x] M6 Agent provenance + draft-gate-by-default — code in `/brain` (✅ agent writes stamped + forced #draft, hidden from discovery, human-promote, per-space opt-out)
 - [ ] M7 Index partitioning + relay scaling
-- [ ] M8 Web explorer/editor (north star)
+- [x] M8 Web explorer/editor (north star) — code in `/web` (✅ build-less graph explorer: search → force-directed subgraph → click-to-expand → live refresh; tested layout + static/proxy server). Inline editing still TODO.
 
 ## 3. Open questions (tracked)
 
