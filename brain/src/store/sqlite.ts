@@ -3,6 +3,7 @@
 // nothing above this file knows which backend is in use.
 import Database from "better-sqlite3";
 import { edgeId } from "../core/ids.js";
+import { dot } from "../embedder.js";
 import type { NodeSummary } from "../core/protocol.js";
 import type { EdgeRec } from "../core/wikilinks.js";
 import type { LoadedDoc, Snapshot, Store } from "./store.js";
@@ -58,6 +59,7 @@ export class SqliteStore implements Store {
       CREATE TABLE IF NOT EXISTS memberships(
         space TEXT, principal_id TEXT, role TEXT, PRIMARY KEY(space, principal_id));
       CREATE TABLE IF NOT EXISTS space_settings(space TEXT PRIMARY KEY, agent_mode TEXT);
+      CREATE TABLE IF NOT EXISTS embeddings(space TEXT, id TEXT, vec BLOB, PRIMARY KEY(space, id));
     `);
   }
 
@@ -181,6 +183,32 @@ export class SqliteStore implements Store {
         .all(query, space, limit) as any[]
     ).map((r) => r.id);
   }
+  upsertEmbedding(space: string, id: string, vec: Float32Array): void {
+    const blob = Buffer.from(vec.buffer, vec.byteOffset, vec.byteLength);
+    this.db
+      .prepare(`INSERT INTO embeddings(space, id, vec) VALUES (?,?,?) ON CONFLICT(space, id) DO UPDATE SET vec=excluded.vec`)
+      .run(space, id, blob);
+  }
+  deleteEmbedding(space: string, id: string): void {
+    this.db.prepare("DELETE FROM embeddings WHERE space=? AND id=?").run(space, id);
+  }
+  searchSemantic(space: string, query: Float32Array, limit: number, includeDrafts: boolean): string[] {
+    const draftClause = includeDrafts ? "" : `AND n.tags NOT LIKE '%"draft"%'`;
+    const rows = this.db
+      .prepare(
+        `SELECT e.id AS id, e.vec AS vec FROM embeddings e
+           JOIN nodes n ON n.space=e.space AND n.id=e.id
+         WHERE e.space=? AND n.stub=0 ${draftClause}`,
+      )
+      .all(space) as { id: string; vec: Buffer }[];
+    const scored = rows.map((r) => {
+      const v = new Float32Array(r.vec.buffer, r.vec.byteOffset, r.vec.byteLength / 4);
+      return { id: r.id, score: dot(query, v) };
+    });
+    scored.sort((a, b) => b.score - a.score);
+    return scored.slice(0, limit).map((s) => s.id);
+  }
+
   tagCounts(space: string): { tag: string; count: number }[] {
     const rows = this.db.prepare("SELECT tags FROM nodes WHERE space=? AND stub=0").all(space) as any[];
     const counts = new Map<string, number>();

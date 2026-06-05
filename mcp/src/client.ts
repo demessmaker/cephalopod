@@ -35,8 +35,8 @@ export class CephalopodClient {
     return `/spaces/${encodeURIComponent(this.space)}${path}`;
   }
 
-  search(query: string, limit = 20): Promise<{ hits: NodeSummary[] }> {
-    return this.req("GET", this.s(`/search?q=${encodeURIComponent(query)}&limit=${limit}`));
+  search(query: string, limit = 20, mode: "text" | "semantic" | "hybrid" = "text"): Promise<{ hits: NodeSummary[] }> {
+    return this.req("GET", this.s(`/search?q=${encodeURIComponent(query)}&limit=${limit}&mode=${mode}`));
   }
   getNote(id: string): Promise<NoteSnapshot> {
     return this.req("GET", this.s(`/notes/${encodeURIComponent(id)}`));

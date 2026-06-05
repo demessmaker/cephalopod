@@ -173,7 +173,8 @@ export function createHttpServer(hub: SpaceHub, auth: Auth) {
     const q = c.url.searchParams.get("q") ?? "";
     const limit = Number(c.url.searchParams.get("limit") ?? 20);
     const drafts = c.url.searchParams.get("drafts") === "1";
-    json(c.res, 200, { hits: q ? hub.search(c.params.space, q, limit, drafts) : [] });
+    const mode = (c.url.searchParams.get("mode") ?? "text") as "text" | "semantic" | "hybrid";
+    json(c.res, 200, { hits: q ? hub.searchMode(c.params.space, q, mode, limit, drafts) : [] });
   });
   route("GET", "/spaces/:space/tags", (c) => {
     if (!require(c, "read")) return;
@@ -184,8 +185,11 @@ export function createHttpServer(hub: SpaceHub, auth: Auth) {
     const m = c.body?.match ?? {};
     const tr = c.body?.traverse;
     if (tr?.from) return json(c.res, 200, hub.neighbors(c.params.space, tr.from, tr.hops ?? 1, tr.dir ?? "both"));
-    if (m.text) return json(c.res, 200, { hits: hub.search(c.params.space, m.text, c.body?.limit ?? 20, !!c.body?.includeDrafts) });
-    err(c.res, 400, "query needs match.text or traverse.from");
+    const limit = c.body?.limit ?? 20;
+    const drafts = !!c.body?.includeDrafts;
+    if (m.semantic) return json(c.res, 200, { hits: hub.searchHybrid(c.params.space, m.semantic, limit, drafts) });
+    if (m.text) return json(c.res, 200, { hits: hub.search(c.params.space, m.text, limit, drafts) });
+    err(c.res, 400, "query needs match.text, match.semantic, or traverse.from");
   });
 
   const server = createServer((req, res) => {

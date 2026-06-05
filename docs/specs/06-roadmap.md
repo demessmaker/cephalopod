@@ -62,7 +62,7 @@ for proving the hard core (CRDT sync + agent surface) before any human UI.
 - [x] M3 CLI arm with offline cache + sync — code in `/arm` (✅ local replica, disk cache, offline edit→reconnect sync, pull scope, two-arm convergence)
 - [x] M4 MCP server (tools) — code in `/mcp` (✅ 9 agent tools over the brain API)
 - [x] M4.1 MCP resources + live subscriptions — code in `/mcp` (✅ note resources + `resources/updated` notifications via a brain WS socket). Prompts still TODO.
-- [ ] M5 Semantic search + hybrid ranking
+- [x] M5 Semantic search + hybrid ranking — code in `/brain` (✅ pluggable embedder, vector search, RRF hybrid; MCP `search` gains `mode`). Real-model embedder is a drop-in.
 - [x] M6 Agent provenance + draft-gate-by-default — code in `/brain` (✅ agent writes stamped + forced #draft, hidden from discovery, human-promote, per-space opt-out)
 - [ ] M7 Index partitioning + relay scaling
 - [ ] M8 Web explorer/editor (north star)

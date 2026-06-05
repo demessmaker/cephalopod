@@ -17,6 +17,7 @@ import {
   type GraphQuery,
 } from "./core/protocol.js";
 import type { Store } from "./store/store.js";
+import { HashingEmbedder, type Embedder } from "./embedder.js";
 
 type ServerConn = Conn<ServerMsg, ClientMsg>;
 
@@ -58,15 +59,20 @@ interface DocState {
 
 export interface HubOptions {
   snapshotEvery?: number; // take a snapshot after N updates to a doc
+  embedder?: Embedder; // pluggable embeddings (default: HashingEmbedder)
 }
+
+export type SearchMode = "text" | "semantic" | "hybrid";
 
 export class SpaceHub {
   private docs = new Map<string, DocState>();
   private conns = new Set<ConnState>();
   private snapshotEvery: number;
+  private embedder: Embedder;
 
   constructor(private store: Store, opts: HubOptions = {}) {
     this.snapshotEvery = opts.snapshotEvery ?? 50;
+    this.embedder = opts.embedder ?? new HashingEmbedder();
   }
 
   addConnection(ch: ServerConn, auth: ConnAuth = ALLOW_ALL): ConnState {
@@ -224,10 +230,30 @@ export class SpaceHub {
   }
 
   search(space: string, query: string, limit = 20, includeDrafts = false): NodeSummary[] {
-    return this.store
-      .search(space, query, limit, includeDrafts)
-      .map((id) => this.store.getNode(space, id))
-      .filter(Boolean) as NodeSummary[];
+    return this.nodesFor(space, this.store.search(space, query, limit, includeDrafts));
+  }
+  searchSemantic(space: string, query: string, limit = 20, includeDrafts = false): NodeSummary[] {
+    return this.nodesFor(space, this.store.searchSemantic(space, this.embedder.embed(query), limit, includeDrafts));
+  }
+  // Reciprocal-rank fusion of lexical (FTS) + semantic (vector) results (03 §3).
+  searchHybrid(space: string, query: string, limit = 20, includeDrafts = false): NodeSummary[] {
+    const lex = this.store.search(space, query, limit * 2, includeDrafts);
+    const sem = this.store.searchSemantic(space, this.embedder.embed(query), limit * 2, includeDrafts);
+    const K = 60;
+    const score = new Map<string, number>();
+    const fuse = (ids: string[]) => ids.forEach((id, i) => score.set(id, (score.get(id) ?? 0) + 1 / (K + i)));
+    fuse(lex);
+    fuse(sem);
+    const ranked = [...score.entries()].sort((a, b) => b[1] - a[1]).slice(0, limit).map((e) => e[0]);
+    return this.nodesFor(space, ranked);
+  }
+  searchMode(space: string, query: string, mode: SearchMode, limit = 20, includeDrafts = false): NodeSummary[] {
+    if (mode === "semantic") return this.searchSemantic(space, query, limit, includeDrafts);
+    if (mode === "hybrid") return this.searchHybrid(space, query, limit, includeDrafts);
+    return this.search(space, query, limit, includeDrafts);
+  }
+  private nodesFor(space: string, ids: string[]): NodeSummary[] {
+    return ids.map((id) => this.store.getNode(space, id)).filter(Boolean) as NodeSummary[];
   }
   tagCounts(space: string) {
     return this.store.tagCounts(space);
@@ -288,11 +314,14 @@ export class SpaceHub {
       this.store.deleteNode(space, note);
       this.store.replaceEdgesFrom(space, note, []);
       this.store.searchDelete(space, note);
+      this.store.deleteEmbedding(space, note);
       return;
     }
     const title = getTitle(h);
+    const body = h.body.toString();
     this.store.upsertNode(space, { id: note, title, tags: h.tags.toArray(), stub: !!h.meta.get("stub") });
-    this.store.searchUpsert(space, note, title, h.body.toString());
+    this.store.searchUpsert(space, note, title, body);
+    this.store.upsertEmbedding(space, note, this.embedder.embed(`${title}\n${body}`));
     const explicit: EdgeRec[] = [...h.outLinks.values()].map((v) => ({
       from: note,
       to: v.to,

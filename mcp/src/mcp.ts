@@ -22,10 +22,15 @@ export function buildServer(client: CephalopodClient, opts: { socket?: BrainSock
   server.registerTool(
     "search",
     {
-      description: "Full-text search the team knowledge graph. Returns ranked notes (id, title, tags).",
-      inputSchema: { query: z.string(), limit: z.number().int().positive().optional() },
+      description:
+        "Search the team knowledge graph. mode: text (keyword), semantic (vector), or hybrid (both, recommended for fuzzy recall). Returns ranked notes.",
+      inputSchema: {
+        query: z.string(),
+        limit: z.number().int().positive().optional(),
+        mode: z.enum(["text", "semantic", "hybrid"]).optional(),
+      },
     },
-    async ({ query, limit }) => ok((await client.search(query, limit ?? 20)).hits),
+    async ({ query, limit, mode }) => ok((await client.search(query, limit ?? 20, mode ?? "text")).hits),
   );
 
   server.registerTool(

@@ -46,6 +46,11 @@ export interface Store {
   search(space: string, query: string, limit: number, includeDrafts: boolean): string[]; // ranked ids
   tagCounts(space: string): { tag: string; count: number }[];
 
+  // --- vector / semantic search (03 §3) ---
+  upsertEmbedding(space: string, id: string, vec: Float32Array): void;
+  deleteEmbedding(space: string, id: string): void;
+  searchSemantic(space: string, query: Float32Array, limit: number, includeDrafts: boolean): string[]; // ranked ids
+
   // --- per-space settings (05 §4: agent write policy) ---
   getAgentMode(space: string): "draft" | "open";
   setAgentMode(space: string, mode: "draft" | "open"): void;

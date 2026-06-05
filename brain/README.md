@@ -18,6 +18,10 @@ HTTP API, full-text search, and token-based per-space access control.
   index doc, `02 §2.2`): neighbors, backlinks, and bounded lazy-neighborhood scopes.
 - ✅ **HTTP Query/Command API** (`03 §2`) — notes CRUD, links, traversal, query.
 - ✅ **Full-text search** (SQLite FTS5) + tag facets (`03 §3`).
+- ✅ **Semantic + hybrid search** (`03 §3`) — per-note embeddings via a pluggable
+  `Embedder` (default: dependency-free feature-hashing; a real model is a
+  drop-in), vector cosine search, and reciprocal-rank-fusion hybrid ranking.
+  `GET /search?mode=text|semantic|hybrid`.
 - ✅ **Auth & RBAC** (`05 §1–2`) — principals (users + agents), hashed tokens,
   per-space roles (viewer/editor/admin), enforced on **both HTTP and WS**.
 - ✅ **Obsidian vault importer** (`08`) — two-pass, idempotent, in-process bulk
