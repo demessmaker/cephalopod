@@ -33,6 +33,20 @@ npm start                      # WS :7700 + HTTP :7701 (CEPH_DB, CEPH_PORT, CEPH
 npm run import -- <vault> --space eng --db ./brain.db   # import an Obsidian vault
 ```
 
+### Docker (self-host)
+
+```bash
+docker compose up --build            # from the repo root
+docker compose logs brain | grep "bootstrap admin token"   # grab the one-time token
+```
+
+Exposes WS `:7700` and HTTP `:7701`; data persists in the `cephalopod-data`
+volume (CRDT log, snapshots, derived index, auth) — survives container restarts.
+*(If you're behind a TLS-intercepting proxy, the build's `npm install` needs your
+proxy CA: mount it and set `NODE_EXTRA_CA_CERTS` / `npm config set cafile`.)*
+
+### Bootstrap token
+
 On first run the brain prints a **bootstrap admin token** (shown once). Use it as
 `Authorization: Bearer <token>`:
 

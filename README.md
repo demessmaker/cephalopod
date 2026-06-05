@@ -28,6 +28,18 @@ back to the central brain.
 | [`brain/`](brain/) | M1–M2.5 ✅ | Persistent sync relay (log, snapshots, spaces, restart, derived index) + HTTP API, FTS5 search, token auth & RBAC, and an Obsidian vault importer. |
 | [`mcp/`](mcp/) | M4–M4.1 ✅ | MCP server — 9 agent tools + note **resources** and **live subscriptions** (`resources/updated`) over the brain API; the agent-facing surface. |
 
+### Quickstart (self-host)
+
+```bash
+docker compose up --build                                   # start the brain
+docker compose logs brain | grep "bootstrap admin token"   # one-time admin token
+# HTTP API on :7701, WS sync relay on :7700
+```
+
+Then create a space, seed from an Obsidian vault (`brain`: `npm run import`), and
+point an agent at it via the MCP server (`mcp/README.md`). Agents get live
+`resources/updated` notifications as the graph changes.
+
 ### Specs
 
 | Spec | What it covers |

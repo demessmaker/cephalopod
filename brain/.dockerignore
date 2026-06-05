@@ -1,0 +1,8 @@
+node_modules
+npm-debug.log
+*.db
+*.db-wal
+*.db-shm
+*.log
+Dockerfile
+.dockerignore
