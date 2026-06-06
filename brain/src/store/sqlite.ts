@@ -7,6 +7,7 @@ import { dot } from "../embedder.js";
 import type { NodeSummary } from "../core/protocol.js";
 import type { EdgeRec } from "../core/wikilinks.js";
 import type { LoadedDoc, Snapshot, Store } from "./store.js";
+import { runMigrations } from "./migrations.js";
 
 const buf = (u: Uint8Array) => Buffer.from(u.buffer, u.byteOffset, u.byteLength);
 const u8 = (b: Buffer) => new Uint8Array(b.buffer, b.byteOffset, b.byteLength);
@@ -25,84 +26,7 @@ export class SqliteStore implements Store {
   constructor(path = ":memory:") {
     this.db = new Database(path);
     this.db.pragma("journal_mode = WAL");
-    this.db.exec(`
-      CREATE TABLE IF NOT EXISTS spaces(name TEXT PRIMARY KEY);
-      CREATE TABLE IF NOT EXISTS updates(
-        seq INTEGER PRIMARY KEY AUTOINCREMENT,
-        space TEXT, note TEXT, update_blob BLOB, actor TEXT, ts INTEGER);
-      CREATE INDEX IF NOT EXISTS updates_doc ON updates(space, note, seq);
-      CREATE INDEX IF NOT EXISTS updates_actor ON updates(space, actor, ts);
-      CREATE TABLE IF NOT EXISTS snapshots(
-        space TEXT, note TEXT, seq INTEGER, state BLOB, ts INTEGER,
-        PRIMARY KEY(space, note));
-      CREATE TABLE IF NOT EXISTS nodes(
-        space TEXT, id TEXT, title TEXT, tags TEXT, stub INTEGER,
-        PRIMARY KEY(space, id));
-      CREATE INDEX IF NOT EXISTS nodes_title ON nodes(space, lower(title));
-      CREATE TABLE IF NOT EXISTS edges(
-        space TEXT, eid TEXT, frm TEXT, dst TEXT, type TEXT, origin TEXT,
-        PRIMARY KEY(space, eid));
-      CREATE INDEX IF NOT EXISTS edges_from ON edges(space, frm);
-      CREATE INDEX IF NOT EXISTS edges_to ON edges(space, dst);
-
-      -- full-text search (FTS5 external-content, 03 §3)
-      CREATE TABLE IF NOT EXISTS notes_search(
-        rowid INTEGER PRIMARY KEY, space TEXT, id TEXT, title TEXT, body TEXT,
-        UNIQUE(space, id));
-      CREATE VIRTUAL TABLE IF NOT EXISTS notes_fts USING fts5(
-        title, body, content='notes_search', content_rowid='rowid');
-      CREATE TRIGGER IF NOT EXISTS notes_ai AFTER INSERT ON notes_search BEGIN
-        INSERT INTO notes_fts(rowid, title, body) VALUES (new.rowid, new.title, new.body);
-      END;
-      CREATE TRIGGER IF NOT EXISTS notes_ad AFTER DELETE ON notes_search BEGIN
-        INSERT INTO notes_fts(notes_fts, rowid, title, body) VALUES ('delete', old.rowid, old.title, old.body);
-      END;
-      CREATE TRIGGER IF NOT EXISTS notes_au AFTER UPDATE ON notes_search BEGIN
-        INSERT INTO notes_fts(notes_fts, rowid, title, body) VALUES ('delete', old.rowid, old.title, old.body);
-        INSERT INTO notes_fts(rowid, title, body) VALUES (new.rowid, new.title, new.body);
-      END;
-
-      -- principals / tokens / roles (05 §1–2)
-      CREATE TABLE IF NOT EXISTS principals(id TEXT PRIMARY KEY, kind TEXT, name TEXT);
-      CREATE TABLE IF NOT EXISTS tokens(hash TEXT PRIMARY KEY, principal_id TEXT);
-      CREATE TABLE IF NOT EXISTS memberships(
-        space TEXT, principal_id TEXT, role TEXT, PRIMARY KEY(space, principal_id));
-      CREATE TABLE IF NOT EXISTS space_settings(space TEXT PRIMARY KEY, agent_mode TEXT, required_facets TEXT);
-      CREATE TABLE IF NOT EXISTS embeddings(space TEXT, id TEXT, vec BLOB, PRIMARY KEY(space, id));
-    `);
-    // migrate older DBs
-    try {
-      this.db.exec("ALTER TABLE space_settings ADD COLUMN required_facets TEXT");
-    } catch {
-      /* column already exists */
-    }
-    try {
-      this.db.exec("ALTER TABLE tokens ADD COLUMN capabilities TEXT");
-    } catch {
-      /* column already exists */
-    }
-    try {
-      this.db.exec("ALTER TABLE space_settings ADD COLUMN max_notes INTEGER");
-    } catch {
-      /* column already exists */
-    }
-    try {
-      this.db.exec("ALTER TABLE space_settings ADD COLUMN secret_scan TEXT");
-    } catch {
-      /* column already exists */
-    }
-    try {
-      this.db.exec("ALTER TABLE snapshots ADD COLUMN ts INTEGER");
-    } catch {
-      /* column already exists */
-    }
-    for (const col of ["actor TEXT", "ts INTEGER"]) {
-      try {
-        this.db.exec(`ALTER TABLE updates ADD COLUMN ${col}`);
-      } catch {
-        /* column already exists */
-      }
-    }
+    runMigrations(this.db); // ordered, recorded schema migrations (see migrations.ts)
   }
 
   ensureSpace(space: string): void {

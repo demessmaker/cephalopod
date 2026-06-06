@@ -85,8 +85,12 @@ with the role — they only narrow it. Implemented:
   `protocol` live in `/core`; `brain` and `arm` re-export them via thin
   `src/core/*` shims (call sites unchanged). Surfaced + fixed a latent null-byte
   in the `docKey` separator. (`spike` keeps its frozen M0 copy.)
-- **Migration runner** — replace the ad-hoc guarded `ALTER` with ordered, recorded
-  migrations (matters as the schema keeps evolving here). ‹next›
+- **Migration runner** — ✅ done: `brain/src/store/migrations.ts` runs ordered,
+  recorded migrations (`schema_migrations` table); v1 is the consolidated,
+  idempotent baseline that also upgrades legacy DBs. The constructor's ad-hoc
+  guarded `ALTER`s are gone; future schema changes append a numbered migration.
+
+**Track A (hardening) is complete.**
 
 ## Deferred tracks (revisit if direction shifts)
 - **C — Scale (SaaS):** Postgres `Store`, relay sharding (NATS/Redis fan-out),
