@@ -30,7 +30,9 @@ export function liveOpen(noteId, onUpdate) {
   if (!wsBase) return () => {};
   let ws;
   try {
-    ws = new WebSocket(`${wsBase}?token=${encodeURIComponent(token)}`);
+    // auth via the Sec-WebSocket-Protocol subprotocol ("bearer", <token>) so the
+    // token never lands in the URL (and thus proxy/access logs or history).
+    ws = new WebSocket(wsBase, ["bearer", token]);
   } catch {
     return () => {};
   }

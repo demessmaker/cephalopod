@@ -13,6 +13,7 @@
   "dependencies": {
     "@noble/hashes": "^1.5.0",
     "better-sqlite3": "^11.7.0",
+    "tsx": "^4.19.2",
     "ws": "^8.18.0",
     "yjs": "^13.6.20"
   },
@@ -20,7 +21,6 @@
     "@types/better-sqlite3": "^7.6.12",
     "@types/node": "^22.10.0",
     "@types/ws": "^8.5.13",
-    "tsx": "^4.19.2",
     "typescript": "^5.7.2",
     "vitest": "^2.1.8"
   }

@@ -33,8 +33,14 @@ const rpm = Number(process.env.CEPH_RATE_RPM ?? 600);
 const http = createHttpServer(hub, auth, { rateLimit: { capacity: rpm, refillPerSec: rpm / 60 } });
 http.listen(HTTP_PORT, () => console.log(`🐙 brain HTTP API on http://localhost:${HTTP_PORT}/v1`));
 
-// WS sync relay — authenticate via ?token= and enforce per-space ACL.
-const wss = new WebSocketServer({ port: WS_PORT });
+// WS sync relay — authenticate via Authorization header, the "bearer" subprotocol
+// (browsers can't set headers, and a subprotocol keeps the token out of the URL),
+// or a ?token= fallback; then enforce per-space ACL. Selecting the "bearer"
+// subprotocol is required for the browser handshake to complete.
+const wss = new WebSocketServer({
+  port: WS_PORT,
+  handleProtocols: (protocols) => (protocols.has("bearer") ? "bearer" : false),
+});
 wss.on("connection", (sock, req) => {
   const token = tokenFromUpgrade(req);
   const p = auth.authenticate(token);

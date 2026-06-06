@@ -11,9 +11,11 @@ services:
   brain:
     build: ./brain
     container_name: cephalopod-brain
+    # bound to loopback by default for a self-host build; drop the 127.0.0.1
+    # prefix (or front it with a TLS-terminating reverse proxy) to expose remotely
     ports:
-      - "7700:7700" # WebSocket sync relay
-      - "7701:7701" # HTTP query/command API
+      - "127.0.0.1:7700:7700" # WebSocket sync relay
+      - "127.0.0.1:7701:7701" # HTTP query/command API
     volumes:
       - cephalopod-data:/data
     environment:

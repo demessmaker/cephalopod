@@ -7,7 +7,22 @@ import { fileURLToPath } from "node:url";
 import { dirname, join, extname, normalize } from "node:path";
 
 const DIR = dirname(fileURLToPath(import.meta.url));
-const MIME = { ".html": "text/html", ".js": "text/javascript", ".css": "text/css", ".mjs": "text/javascript", ".json": "application/json" };
+const MIME = {
+  ".html": "text/html; charset=utf-8",
+  ".js": "text/javascript; charset=utf-8",
+  ".css": "text/css; charset=utf-8",
+  ".mjs": "text/javascript; charset=utf-8",
+  ".json": "application/json; charset=utf-8",
+};
+
+// Hop-by-hop headers (RFC 7230 §6.1) must not be forwarded by a proxy. Passing
+// client-controlled ones through is a request-smuggling/desync footgun.
+const HOP_BY_HOP = new Set([
+  "connection", "keep-alive", "proxy-authenticate", "proxy-authorization",
+  "te", "trailer", "transfer-encoding", "upgrade",
+]);
+const stripHopByHop = (headers) =>
+  Object.fromEntries(Object.entries(headers).filter(([k]) => !HOP_BY_HOP.has(k.toLowerCase())));
 
 /** Create the explorer web server. brainUrl is the brain's HTTP base (e.g. http://localhost:7701). */
 export function createWebServer({ brainUrl = "http://localhost:7701", staticDir = DIR } = {}) {
@@ -17,10 +32,11 @@ export function createWebServer({ brainUrl = "http://localhost:7701", staticDir 
 
     // reverse-proxy the API
     if (url.pathname.startsWith("/v1/")) {
+      const fwdHeaders = { ...stripHopByHop(req.headers), host: brain.host };
       const proxied = httpRequest(
-        { hostname: brain.hostname, port: brain.port, path: url.pathname + url.search, method: req.method, headers: { ...req.headers, host: brain.host } },
+        { hostname: brain.hostname, port: brain.port, path: url.pathname + url.search, method: req.method, headers: fwdHeaders },
         (pr) => {
-          res.writeHead(pr.statusCode ?? 502, pr.headers);
+          res.writeHead(pr.statusCode ?? 502, stripHopByHop(pr.headers));
           pr.pipe(res);
         },
       );
