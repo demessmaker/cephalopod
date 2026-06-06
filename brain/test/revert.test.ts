@@ -75,4 +75,9 @@ describe("N6 — reversibility", () => {
   it("validates the since timestamp", async () => {
     expect((await api("POST", "/spaces/kb/revert", admin, { principalId: agentId, since: "not-a-date" })).status).toBe(400);
   });
+
+  it("requires `since` (won't default to reverting all history)", async () => {
+    expect((await api("POST", "/spaces/kb/revert", admin, { principalId: agentId })).status).toBe(400);
+    expect((await api("POST", "/spaces/kb/revert", admin, { principalId: agentId, since: "" })).status).toBe(400);
+  });
 });

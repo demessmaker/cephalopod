@@ -255,7 +255,12 @@ export function createHttpServer(hub: SpaceHub, auth: Auth, opts: HttpOptions = 
     if (!require(c, "admin")) return;
     const { principalId, since } = c.body ?? {};
     if (!principalId) return err(c.res, 400, "principalId required");
-    const sinceTs = typeof since === "number" ? since : since ? Date.parse(since) : 0;
+    // `since` is required: defaulting it to 0 would silently revert the actor's
+    // ENTIRE history (every edit has ts >= 0) — a destructive op must be explicit.
+    if (since === undefined || since === null || since === "") {
+      return err(c.res, 400, "since required (epoch ms or ISO timestamp)");
+    }
+    const sinceTs = typeof since === "number" ? since : Date.parse(since);
     if (Number.isNaN(sinceTs)) return err(c.res, 400, "since must be epoch ms or an ISO timestamp");
     console.error(`[audit] revert ${c.params.space} actor=${principalId} since=${new Date(sinceTs).toISOString()} by ${c.principal.id}`);
     json(c.res, 200, { reverted: hub.revertActor(c.params.space, principalId, sinceTs) });

@@ -11,6 +11,14 @@ import type { LoadedDoc, Snapshot, Store } from "./store.js";
 const buf = (u: Uint8Array) => Buffer.from(u.buffer, u.byteOffset, u.byteLength);
 const u8 = (b: Buffer) => new Uint8Array(b.buffer, b.byteOffset, b.byteLength);
 
+// Turn free-text into a safe FTS5 MATCH expression: each whitespace-delimited
+// token becomes a quoted string literal (internal quotes doubled), so FTS5
+// operators in user input (", *, :, AND, OR, NEAR, parens, …) are matched
+// literally instead of throwing `fts5: syntax error`. Empty input -> "" (the
+// caller treats that as "no results" rather than running an invalid query).
+const toFtsMatch = (raw: string): string =>
+  (raw.match(/\S+/g) ?? []).map((t) => `"${t.replace(/"/g, '""')}"`).join(" ");
+
 export class SqliteStore implements Store {
   private db: Database.Database;
 
@@ -222,6 +230,8 @@ export class SqliteStore implements Store {
   }
   search(space: string, query: string, limit: number, includeDrafts: boolean, tagFilters: string[] = []): string[] {
     // exclude #draft notes from discovery unless asked (05 §4); filter by facet tags
+    const match = toFtsMatch(query);
+    if (!match) return []; // empty/operator-only query — nothing to match
     const draftClause = includeDrafts ? "" : `AND n.tags NOT LIKE '%"draft"%'`;
     const tagClause = tagFilters.map(() => "AND n.tags LIKE ?").join(" ");
     return (
@@ -232,7 +242,7 @@ export class SqliteStore implements Store {
              JOIN nodes n ON n.space=s.space AND n.id=s.id
            WHERE notes_fts MATCH ? AND s.space=? ${draftClause} ${tagClause} ORDER BY rank LIMIT ?`,
         )
-        .all(query, space, ...tagFilters.map((f) => `%"${f}"%`), limit) as any[]
+        .all(match, space, ...tagFilters.map((f) => `%"${f}"%`), limit) as any[]
     ).map((r) => r.id);
   }
   upsertEmbedding(space: string, id: string, vec: Float32Array): void {

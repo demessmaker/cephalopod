@@ -115,6 +115,22 @@ describe("M3 CLI arm — local replica + sync", () => {
     B.disconnect();
   });
 
+  it("an abrupt drop routes later edits to the offline queue (not lost)", async () => {
+    const A = new Replica({ ...base, cacheDir: cache() });
+    await A.connect();
+    const id = A.newNote({ title: "Drop", body: "v1" });
+    await A.waitIdle();
+
+    // simulate a network drop — NOT a clean disconnect() — by killing the socket
+    (A as any).ws.terminate();
+    await wait(50);
+    expect(A.connected).toBe(false);
+
+    A.appendBody(id, " +afterdrop");
+    expect(A.status().dirty).toContain(id); // queued for the next reconnect, not swallowed
+    A.disconnect();
+  });
+
   it("pull caches a scope (focus + neighbors)", async () => {
     const A = new Replica({ ...base, cacheDir: cache() });
     await A.connect();

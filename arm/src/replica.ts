@@ -69,7 +69,17 @@ export class Replica {
         for (const id of this.working) this.openAndSync(id); // reconcile all cached docs
         resolve();
       });
-      ws.on("error", reject);
+      // A drop AFTER connect must flip `connected` so subsequent edits fall through
+      // to the offline `dirty` path instead of being silently swallowed by send().
+      // (reject() is a no-op once the open promise has already resolved.)
+      ws.on("close", () => {
+        if (this.ws === ws) this.ws = undefined;
+        this.connected = false;
+      });
+      ws.on("error", (err) => {
+        this.connected = false;
+        reject(err);
+      });
       ws.on("message", (data) => {
         this.lastMsgAt = Date.now();
         try {
