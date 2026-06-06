@@ -14,21 +14,18 @@ controllable to point many AI agents at the graph.
 GitHub Actions (`.github/workflows/ci.yml`) installs all packages and runs every
 typecheck + test suite on push/PR.
 
-### N2 — Close the WS policy gap  ‹small–med, do next›
-**Gap:** draft-gating (M6) and required-facet validation are enforced only in the
-HTTP layer. A client writing over the **WebSocket** (an arm, or any editor-token
-*agent*) applies CRDT deltas directly, bypassing both. For agent-heavy use this is
-the sharpest hole — an agent token could open a WS and write live, un-gated notes.
+### N2 — Close the WS policy gap ✅ (done)
+**Was:** draft-gating (M6) and facet validation lived only in the HTTP layer, so a
+WS writer (any editor-token *agent*) could apply CRDT deltas directly and create
+live, un-gated notes.
 
-**Plan:** treat the WS as a *policy-enforced* path, not a trusted one.
-- On `update`/`sync2`, after applying a delta, run the same provenance stamp +
-  draft-gate + facet check the HTTP path uses (in `SpaceHub.commit`/`reindex`),
-  keyed off the connection's principal kind and the space settings.
-- Agent WS writes in a `draft` space → force `#draft` (or reject promotion of the
-  draft tag); reject facet-less notes (or quarantine as `#draft` + `#needs-facets`).
-- Distinguish principal kind on the WS connection (already known at auth).
-- **Acceptance:** an agent token cannot create a live/un-faceted note via WS;
-  a human (user) token is unaffected; covered by a new `brain` WS+policy test.
+**Done:** the connection now carries the principal `kind`; after an agent's WS
+delta is applied, `SpaceHub.enforceAgentWrite` *corrects* post-hoc (a delta can't
+be rejected once applied): stamps `authoredBy:agent`, forces `#draft` in draft-mode
+spaces (an agent can't publish via WS), and quarantines facet-less notes with
+`#needs-facets`. Humans (`kind !== "agent"`) are untouched. Covered by
+`brain/test/ws-policy.test.ts` (agent forced to draft + hidden; human stays live;
+facet-less agent note quarantined).
 
 ### N3 — Capability-scoped tokens  ‹med› (`05 §2.2`)
 Today: per-space role (viewer/editor/admin). Add capability constraints that

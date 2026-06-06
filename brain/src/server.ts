@@ -32,7 +32,7 @@ wss.on("connection", (sock, req) => {
   const token = new URL(req.url ?? "/", "http://localhost").searchParams.get("token") ?? undefined;
   const p = auth.authenticate(token);
   const connAuth: ConnAuth = p
-    ? { canRead: (s) => can(auth.roleOf(s, p.id), "read"), canWrite: (s) => can(auth.roleOf(s, p.id), "write") }
+    ? { canRead: (s) => can(auth.roleOf(s, p.id), "read"), canWrite: (s) => can(auth.roleOf(s, p.id), "write"), kind: p.kind }
     : { canRead: () => false, canWrite: () => false };
   const conn = hub.addConnection(wsConn<ServerMsg, ClientMsg>(sock), connAuth);
   sock.on("close", () => hub.removeConnection(conn));

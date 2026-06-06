@@ -22,10 +22,12 @@ import { HashingEmbedder, type Embedder } from "./embedder.js";
 type ServerConn = Conn<ServerMsg, ClientMsg>;
 
 // A connection's access policy (built from token -> principal -> role by the
-// ws-server; tests/internal callers use ALLOW_ALL).
+// ws-server; tests/internal callers use ALLOW_ALL). `kind` lets the WS write
+// path apply the same agent policy (draft-gate/facets/provenance) as HTTP.
 export interface ConnAuth {
   canRead(space: string): boolean;
   canWrite(space: string): boolean;
+  kind?: "agent" | "user";
 }
 export const ALLOW_ALL: ConnAuth = { canRead: () => true, canWrite: () => true };
 
@@ -147,6 +149,30 @@ export class SpaceHub {
     const st = this.getDoc(space, note);
     Y.applyUpdate(st.doc, bytes, conn); // origin = conn
     this.commit(space, note, st, bytes, raw, conn);
+    this.enforceAgentWrite(conn, space, note); // N2: WS writes obey agent policy too
+  }
+
+  // Post-hoc enforcement of agent policy on WS writes (05 §4). A CRDT delta can't
+  // be rejected after it's applied, so we *correct*: stamp provenance, force
+  // #draft in draft-mode spaces (an agent can't publish via WS), and quarantine
+  // facet-less notes with #needs-facets. Humans (kind !== "agent") are untouched.
+  private enforceAgentWrite(conn: ConnState, space: string, note: string): void {
+    if (conn.auth.kind !== "agent") return;
+    const doc = this.docs.get(docKey(space, note))?.doc;
+    if (!doc) return;
+    const h = handle(note, doc);
+    if (h.meta.get("deleted")) return;
+    const tags = h.tags.toArray();
+    const needStamp = h.props.get("authoredBy") !== "agent";
+    const needDraft = this.getAgentMode(space) === "draft" && !tags.includes("draft");
+    const needFacets = this.missingFacets(space, tags).length > 0 && !tags.includes("needs-facets");
+    if (!needStamp && !needDraft && !needFacets) return;
+    this.applyLocalEdit(space, note, (hh) => {
+      if (needStamp) hh.props.set("authoredBy", "agent");
+      const t = hh.tags.toArray();
+      if (needDraft && !t.includes("draft")) hh.tags.push(["draft"]);
+      if (needFacets && !t.includes("needs-facets")) hh.tags.push(["needs-facets"]);
+    });
   }
 
   // Shared persist + index + snapshot + fan-out path for both WS deltas and
