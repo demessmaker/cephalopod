@@ -1,0 +1,25 @@
+{
+  "name": "cephalopod-arm",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Phase-1 CLI arm (M3): a developer's local replica — offline cache + delta sync.",
+  "scripts": {
+    "arm": "tsx src/cli.ts",
+    "test": "vitest run",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@noble/hashes": "^1.5.0",
+    "ws": "^8.18.0",
+    "yjs": "^13.6.20"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.0",
+    "@types/ws": "^8.5.13",
+    "better-sqlite3": "^11.7.0",
+    "tsx": "^4.19.2",
+    "typescript": "^5.7.2",
+    "vitest": "^2.1.8"
+  }
+}

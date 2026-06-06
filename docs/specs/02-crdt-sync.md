@@ -40,37 +40,63 @@ Each note is its own CRDT document (`Y.Doc`), keyed by note `id`:
 | Field | CRDT type | Notes |
 |-------|-----------|-------|
 | `body` | `Y.XmlFragment` | rich-text (markdown ⇄ ProseMirror schema) |
-| `title` | `Y.Text` | short text |
 | `tags` | `Y.Array<string>` as a set | add/remove, dedup on read |
 | `props` | `Y.Map` | freeform key→value (LWW per key) |
-| `meta` | `Y.Map` | createdAt/By, stub flag, etc. |
+| `outLinks` | `Y.Map` | **explicit** outgoing edges keyed by edge id (§01-2.3) → `{ to, type, props }`; OR-Set semantics |
+| `meta` | `Y.Map` | `title` (LWW scalar), createdAt/By, stub flag, deleted, etc. |
 
-Concurrent edits to *different* fields merge cleanly; concurrent edits to the
-*same* scalar (e.g. two renames of `title`) resolve by Yjs's deterministic
-ordering (effectively last-writer-wins, but identical on all replicas).
+> **`title` is an LWW field in `meta`, NOT `Y.Text`** — a correction from the M0
+> spike (`07 §9`). `Y.Text` is a *sequence* CRDT: two concurrent renames
+> character-merge (`"Title-A"` + `"Title-B"` → `"Title-BTitle-A"`) rather than
+> picking a winner. Scalars that want last-writer-wins must live in a `Y.Map`.
 
-### 2.2 The graph index document
+Concurrent edits to *different* fields merge cleanly. A scalar in a `Y.Map` (e.g.
+two renames of `meta.title`) resolves to a single deterministic last-writer-wins
+value, identical on all replicas. Concurrent edits within `body` (`Y.Text`)
+collaboratively merge — the desired behavior for prose.
 
-Per space there is one **graph index** CRDT document holding lightweight node
-and edge records — the connective tissue, *not* note bodies:
+**Edges live with their source note.** Explicit edges (`link()` via API/MCP) are
+stored in the source note's `outLinks` map, so they sync conflict-free with the
+note and need no global edge document. Wikilink edges are *derived* from `body`
+(deterministic edge ids, §01-2.3) and are not stored separately at all — they are
+recomputed wherever the note doc is held.
 
-| Map | Key | Value |
-|-----|-----|-------|
-| `nodes` | note `id` | `{ title, tags, stub, updatedAt }` (denormalized stub) |
-| `edges` | edge `id` (§01-2.3) | `{ from, to, type, origin }` |
+### 2.2 The graph index is server-derived (not one CRDT doc)
 
-- Edges are stored in an **OR-Set** style map keyed by deterministic edge id, so
-  concurrent creation of the same logical edge converges to one entry, and
-  add/remove races resolve predictably (add-wins by default, configurable).
-- The index is small per node (~a few hundred bytes), so an arm can cache the
-  index for its working set — or, for big spaces, a **partition** of it (§3.3).
+> **Scale decision (resolves OQ-2).** At the v1 target of **~250k notes/space**
+> (and ~1M+ edges), a single denormalized graph-index CRDT document would be
+> hundreds of MB — too large to sync into every arm or hold hot per connection.
+> So there is **no monolithic index document**. The queryable adjacency is a
+> **server-derived index**, and the only authoritative graph state is the set of
+> per-note CRDT docs.
 
-### 2.3 Why split body vs index
+The brain maintains, per space, a derived index (Postgres — `04 §2.4`) built by
+processing per-note doc updates:
 
-- Traversal/search needs only the index → cheap to cache broadly.
-- Editing needs the note doc → fetched on demand for notes you open.
-- An arm caching "the auth subgraph" pulls the relevant index partition + the
-  note docs it actually opens, not every byte of every note.
+| Index | Contents | Source |
+|-------|----------|--------|
+| `nodes` | `id, title, tags, props, stub, updatedAt` | note doc fields |
+| `edges` | `from, to, type, origin` (+ reverse for backlinks) | `outLinks` (explicit) + wikilinks parsed from `body` |
+
+- This index is **rebuildable** from the per-note docs / update log; losing it is
+  non-fatal. It is *not* synced as CRDT state.
+- Backlinks come from the index's reverse edge table — a note doc alone does not
+  know its inbound edges.
+- Concurrency/convergence still holds because the *sources* are CRDT: explicit
+  edges are OR-Set entries in the source note's `outLinks`; wikilink edges are a
+  deterministic function of converged note bodies.
+
+### 2.3 What an arm caches vs. asks the server
+
+- An arm holds full CRDT **note docs** only for its working set (notes it opened
+  or that match its scope).
+- **Traversal/search/backlinks within the cached working set** are answered
+  locally (the arm has those notes' bodies + `outLinks`).
+- **Traversal/search beyond the cache** goes to the server's derived index via
+  lazy-neighborhood streaming (§3.3, `03 §2.2`) — the arm never needs the whole
+  graph to explore part of it.
+- Offline, an arm can only traverse what it cached; exploring further requires
+  reconnecting. This matches the "cache the subgraph you're working on" model.
 
 ## 3. Subgraph caching (the "working set")
 
@@ -111,17 +137,24 @@ either direction:  UPDATE {doc, deltaBytes}           (CRDT update = the "delta"
 - Server is a **relay + store**, not a CRDT authority that can reject merges —
   it cannot "lose"; it can only *refuse* (auth) before applying (§5, security).
 
-### 3.3 Partitioning the graph index for large spaces
+### 3.3 Resolving a scope at 250k-note scale
 
-For spaces with very large indexes, a single index doc is too big to cache
-whole. Options (decision OQ-2):
+Because there is no monolithic index doc (§2.2), the brain resolves a scope
+**server-side** against its derived index and streams only what matches:
 
-- **Shard by namespace/path prefix** — arm caches only the shards intersecting
-  its scope.
-- **Lazy neighborhood loading** — server computes the N-hop closure server-side
-  and streams only those node/edge records as a synthetic sub-index doc.
+1. **Resolve** — evaluate the scope predicate (ids / N-hop neighborhood / query /
+   path prefix) against the server index to a concrete set of note ids.
+2. **Stream index slice** — send the lightweight node/edge records for that set
+   as an ephemeral, read-mostly **sub-index** the arm caches for traversal UI.
+3. **Stream note docs** — open CRDT sync (§3.2) for the notes the arm actually
+   pins/opens (not every note in the slice).
+4. **Stay live** — as the graph changes, notes entering/leaving the scope are
+   pushed/evicted; the arm pins opened notes so they aren't dropped.
 
-v1 default: single index doc up to a soft size cap, then path-prefix sharding.
+This makes **lazy-neighborhood loading the v1 mechanism**, not a later option.
+Path-prefix (`props.path`) is just one scope predicate, not a separate sharding
+scheme. The server index itself is sharded/partitioned as a storage concern in
+`04 §4` (and a dedicated graph store remains OQ-4 if traversal latency demands).
 
 ### 3.4 Offline & reconnection
 
@@ -141,21 +174,24 @@ The brain stores, per space:
    This is the source of truth and the audit trail (`05-security.md`).
 2. **Materialized snapshots** — periodic compacted `Y.Doc` state per document,
    so a new arm syncs from a snapshot + tail rather than replaying all history.
-3. **Derived indexes** (rebuildable): full-text, tag, and vector indexes
-   (`03-api-mcp.md §3`). Never authoritative.
+3. **Derived indexes** (rebuildable): the graph adjacency/backlink index (§2.2)
+   plus full-text, tag, and vector indexes (`03-api-mcp.md §3`). Never
+   authoritative.
 
 Time-travel/blame is served by replaying the log up to a timestamp or by Yjs
 snapshots. Retention/compaction policy is OQ-3.
 
 ## 5. Deletion & tombstones
 
-- Deleting a note writes a tombstone in the graph index (`nodes[id].deleted`)
-  and clears/closes the note doc; the note doc's content CRDT retains tombstoned
-  items so late-arriving edits from an offline arm don't resurrect content
-  inconsistently.
-- Deleting an edge removes it from the OR-Set (remove-wins only within the same
-  causal context; a concurrent re-add wins by default — add-wins — to avoid
-  silently dropping a link someone is actively making). Configurable per space.
+- Deleting a note sets a tombstone in the note doc itself (`meta.deleted`); the
+  note doc's content CRDT retains tombstoned items so late-arriving edits from an
+  offline arm don't resurrect content inconsistently. The server index drops the
+  node on processing the tombstone.
+- Deleting an **explicit** edge removes it from the source note's `outLinks`
+  OR-Set (remove-wins within the same causal context; a concurrent re-add wins by
+  default — add-wins — to avoid silently dropping a link someone is actively
+  making). Configurable per space. A **wikilink** edge disappears when the link
+  is removed from the body and the derived edge is recomputed.
 - **Hard purge** (GDPR/secret leakage) is an out-of-band admin op that rewrites
   the log + snapshots and force-resyncs arms. Rare, audited.
 

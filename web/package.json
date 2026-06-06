@@ -1,0 +1,14 @@
+{
+  "name": "cephalopod-web",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Phase-4 web graph explorer (north-star UI) — build-less vanilla ES modules.",
+  "scripts": {
+    "start": "node src/serve.mjs",
+    "test": "vitest run"
+  },
+  "devDependencies": {
+    "vitest": "^2.1.8"
+  }
+}

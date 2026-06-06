@@ -71,10 +71,12 @@ Agents writing to shared memory is powerful and risky. Mitigations:
 
 - **Provenance flag**: notes/edges carry `props.authoredBy = agent|human|mixed`;
   queries can filter (e.g. "human-verified decisions only").
-- **Review gates (optional, per space)**: a space may require agent-authored
-  notes to be marked `draft` until a human `editor` promotes them. Implemented as
-  a tag convention (`#draft`) plus a capability that lets agents create only
-  `#draft` notes.
+- **Draft-gate by default**: agent-authored notes are created as `#draft` and are
+  excluded from the "live" knowledge set (default queries, resource listings)
+  until a human `editor` promotes them. Implemented as a tag convention
+  (`#draft`) plus a capability that limits agent tokens to creating/editing
+  `#draft` notes. A space may **opt out per-space** to grant agents full write
+  autonomy (or tighten further) in its settings — but the secure default is on.
 - **Rate limits & quotas** per token to bound runaway agents.
 - **Reversibility**: every change is a CRDT delta in the log; an admin can
   revert an agent's recent edits by applying inverse deltas (soft) without

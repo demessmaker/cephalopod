@@ -1,0 +1,16 @@
+node_modules
+npm-debug.log
+*.db
+*.db-wal
+*.db-shm
+*.log
+Dockerfile
+.dockerignore
+# keep tests, local config, and secrets out of the image
+test
+tsconfig.json
+*.md
+.env
+.env.*
+.git
+.gitignore

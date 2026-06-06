@@ -1,0 +1,23 @@
+# Build context is the repo root (see brain/Dockerfile). Keep the context small
+# and the image lean: ship only core/ + brain/ source, no deps/tests/config.
+**/node_modules
+.git
+.gitignore
+**/*.db
+**/*.db-wal
+**/*.db-shm
+**/*.log
+# tests, local config, secrets, and docs aren't needed at runtime
+**/test
+**/tsconfig.json
+**/*.md
+.env
+**/.env*
+# packages and tooling unrelated to the brain image
+arm
+mcp
+web
+spike
+docs
+.claude
+.github

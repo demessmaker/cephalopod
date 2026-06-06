@@ -20,7 +20,30 @@ back to the central brain.
 
 ## Status
 
-📋 **Spec phase.** No code yet — see [`docs/specs/`](docs/specs/).
+🔨 **Building.** Specs in [`docs/specs/`](docs/specs/); code under way:
+
+| Package | Milestone | What |
+|---------|-----------|------|
+| [`core/`](core/) | — | Shared single-source-of-truth: note schema, ids, wikilink derivation, wire protocol (used by `brain` + `arm`). |
+| [`spike/`](spike/) | M0 ✅ | Convergence prototype — validated Yjs + lazy-neighborhood at 250k nodes. |
+| [`brain/`](brain/) | M1–M2.5 ✅ | Persistent sync relay (log, snapshots, spaces, restart, derived index) + HTTP API, FTS5 search, token auth & RBAC, and an Obsidian vault importer. |
+| [`mcp/`](mcp/) | M4–M4.1 ✅ | MCP server — 9 agent tools, note **resources**, **live subscriptions** (`resources/updated`), and guided **prompts** (`capture-decision`/`onboard`); the agent-facing surface. |
+| [`arm/`](arm/) | M3 ✅ | CLI arm — a developer's local replica: offline disk cache, edit-offline→reconnect sync, pull-a-scope, two-arm convergence. |
+| [`web/`](web/) | M8 ✅ | Web graph explorer (north-star UI) — build-less: search → force-directed subgraph → click-to-expand → live refresh. |
+
+### Quickstart (self-host)
+
+```bash
+docker compose up --build                                   # start the brain
+docker compose logs brain | grep "bootstrap admin token"   # one-time admin token
+# HTTP API on :7701, WS sync relay on :7700
+```
+
+Then create a space, seed from an Obsidian vault (`brain`: `npm run import`), and
+point an agent at it via the MCP server (`mcp/README.md`). Agents get live
+`resources/updated` notifications as the graph changes.
+
+### Specs
 
 | Spec | What it covers |
 |------|----------------|
@@ -31,6 +54,9 @@ back to the central brain.
 | [04 — Architecture](docs/specs/04-architecture.md) | Components, storage, scaling, deployment. |
 | [05 — Security](docs/specs/05-security.md) | Auth, spaces, ACLs, attribution, agent trust. |
 | [06 — Roadmap](docs/specs/06-roadmap.md) | Phasing, milestones, open questions. |
+| [07 — Phase-0 Spike](docs/specs/07-phase0-spike.md) | The M0 convergence prototype: what it proves and how to build it. |
+| [08 — Obsidian Import](docs/specs/08-obsidian-import.md) | Mapping an Obsidian vault into a space (v1 seeding). |
+| [09 — Next Steps](docs/specs/09-next-steps.md) | Post-Phase-1 plan: hardening + the agent-safety track. |
 
 Open questions and questions for the product owner are tracked in
 [the roadmap](docs/specs/06-roadmap.md#3-open-questions-tracked).

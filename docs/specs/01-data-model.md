@@ -84,6 +84,13 @@ Three ways a link comes into existence, all converging on the same edge model:
    sets the edge type. → `origin: "wikilink"`, `type: "depends_on"`.
 3. **Explicit / property link**: created via API/MCP (`link(from,to,type)`), or
    a note property whose value is a note-ref. → `origin: "explicit"|"property"`.
+4. **Code reference** (reserved, v1 = URL only): `[[code:: <url>]]` for a plain
+   source link, or `[[symbol:: pkg.Module.func]]` for a symbol. In v1 the target
+   is stored as an **external reference** — `props.href` (URL) and/or
+   `props.symbol` (string) on the edge — with **no live resolution**. The
+   `symbol::` form is reserved now so Phase-3 LSP indexing can later bind it to a
+   real definition (file+range at a commit) without a data-model change.
+   → `origin: "wikilink"`, `type: "code"`.
 
 Wikilinks are parsed from the CRDT text on every change; the derived edge set is
 reconciled into the graph index (see `02-crdt-sync.md §4`).
@@ -113,6 +120,12 @@ e_id = blake3(from + "→" + to + "::" + type)
 So the same logical link created concurrently on two replicas produces the same
 edge id and merges to one edge (no duplicates). Explicit edges may instead carry
 a generated `e_` ULID when intentional multiplicity is desired.
+
+**Where edges are stored.** Explicit edges live in the *source* note's CRDT doc
+(`outLinks`, `02 §2.1`) so they sync conflict-free with that note; wikilink edges
+are derived from the body and not stored separately. The whole-space queryable
+adjacency (incl. backlinks) is a server-derived index, not synced state
+(`02 §2.2`).
 
 ## 3. Markdown & embedded structure
 
@@ -153,4 +166,46 @@ Derived edges:
   e2: n_billing --(plain)----->  n_adr014    (origin wikilink)
 
 Backlink query on n_gateway returns e1 (incoming depends_on from Billing).
+```
+
+## 7. Facets & optional structure (per-space)
+
+The global model stays freeform (no imposed schema). Teams that need structure —
+e.g. an agency where knowledge maps to a **client** and **project** — opt into it
+*per space*, without changing the model for anyone else. This is the concrete form
+of the "hybrid" schema choice.
+
+### 7.1 Facets are `key:value` tags
+
+A facet is just a `key:value` tag (`client:acme`, `project:billing-revamp`),
+already the model's faceting mechanism (§1.3). They are indexed, surfaced by
+`GET /tags`, and filterable on search/listing (`?tag=client:acme`).
+
+### 7.2 Required facets (opt-in, per space)
+
+A space may declare required facet **keys** (e.g. `["client","project"]`). The
+brain then rejects (HTTP 422) any note created/retagged without a tag for each
+required key. Two exemptions keep cross-cutting knowledge homeless-free:
+
+- a note tagged `shared` (a shared lib, infra runbook, onboarding doc), and
+- a note that *is* a facet node (tagged with the key itself, e.g. `#client`).
+
+Set via `PUT /v1/spaces/:s/settings { "requiredFacets": ["client","project"] }`.
+Spaces with no requirement behave exactly as before. Bulk import (e.g. Obsidian)
+bypasses validation — imports may legitimately be cross-cutting.
+
+### 7.3 Client / project as first-class nodes
+
+Clients and projects are **notes**, not a hardcoded type system: a `#client` note
+(`Acme`) and a `#project` note (`Billing Revamp`, tagged `client:acme`), joined by
+`belongs_to` edges (note → project → client). Because they are nodes you get
+rollups ("everything for Acme" = the client node's neighborhood), a place to hang
+context, scoped/graph-proximity search, and a future per-client ACL seam — all via
+convention, no schema engine.
+
+```
+#client  "Acme"
+#project "Billing Revamp"  tags:[project, client:acme]   --belongs_to--> Acme
+note     "Idempotent charges"  tags:[decision, client:acme, project:billing-revamp]
+           --belongs_to--> "Billing Revamp"
 ```
