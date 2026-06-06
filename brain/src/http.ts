@@ -284,7 +284,9 @@ export function createHttpServer(hub: SpaceHub, auth: Auth, opts: HttpOptions = 
     const sinceTs = typeof since === "number" ? since : Date.parse(since);
     if (Number.isNaN(sinceTs)) return err(c.res, 400, "since must be epoch ms or an ISO timestamp");
     console.error(`[audit] revert ${c.params.space} actor=${principalId} since=${new Date(sinceTs).toISOString()} by ${c.principal.id}`);
-    json(c.res, 200, { reverted: hub.revertActor(c.params.space, principalId, sinceTs) });
+    // `reverted`: notes changed; `partial`: notes only best-effort reverted because
+    // some of the actor's edits were already compacted into a snapshot.
+    json(c.res, 200, hub.revertActor(c.params.space, principalId, sinceTs));
   });
 
   // --- links & traversal --- (a link mutates `from`, so scope-check `from`)

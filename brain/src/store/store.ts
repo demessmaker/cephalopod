@@ -15,6 +15,7 @@ export interface Principal {
 export interface Snapshot {
   seq: number;
   state: Uint8Array;
+  coversTs?: number; // max ts of the updates folded into this snapshot (for revert completeness)
 }
 
 export interface LoadedDoc {

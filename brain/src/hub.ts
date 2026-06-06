@@ -445,9 +445,11 @@ export class SpaceHub {
   // Reversibility (05 §4): undo a principal's edits to a note since `sinceTs` by
   // replaying the retained log tail WITHOUT those deltas, then overwriting the
   // live doc with the reconstructed "clean" content. History-preserving (the
-  // revert is itself a new, attributed edit). Returns true if anything changed.
-  // Limitation: only edits still in the un-compacted tail can be reverted.
-  private revertNote(space: string, note: string, actor: string, sinceTs: number): boolean {
+  // revert is itself a new, attributed edit).
+  // Limitation: only edits still in the un-compacted tail can be dropped. If a
+  // snapshot folded in edits at/after sinceTs, the actor's edits among them are
+  // baked in and unrevertable — the result is flagged `partial`.
+  private revertNote(space: string, note: string, actor: string, sinceTs: number): { changed: boolean; partial: boolean } {
     const { snapshot, updates } = this.store.loadDocMeta(space, note);
     const clean = new Y.Doc();
     if (snapshot) Y.applyUpdate(clean, snapshot.state, "load");
@@ -459,7 +461,9 @@ export class SpaceHub {
       }
       Y.applyUpdate(clean, u.bytes, "load");
     }
-    if (!changed) return false;
+    // the snapshot may contain this actor's pre-compaction edits in the revert window
+    const partial = !!snapshot && (snapshot.coversTs ?? 0) >= sinceTs;
+    if (!changed) return { changed: false, partial };
     const c = handle(note, clean);
     this.applyLocalEdit(
       space,
@@ -479,16 +483,22 @@ export class SpaceHub {
       },
       "revert",
     );
-    return true;
+    return { changed: true, partial };
   }
 
-  // Revert all of a principal's edits across the space since `sinceTs`.
-  revertActor(space: string, actor: string, sinceTs: number): string[] {
+  // Revert all of a principal's edits across the space since `sinceTs`. Returns the
+  // notes reverted, plus `partial`: notes whose revert is best-effort because some of
+  // the actor's edits were already compacted into a snapshot and can't be undone.
+  revertActor(space: string, actor: string, sinceTs: number): { reverted: string[]; partial: string[] } {
     const reverted: string[] = [];
+    const partial: string[] = [];
     for (const note of this.store.notesTouchedBy(space, actor, sinceTs)) {
-      if (this.revertNote(space, note, actor, sinceTs)) reverted.push(note);
+      const r = this.revertNote(space, note, actor, sinceTs);
+      if (!r.changed) continue;
+      reverted.push(note);
+      if (r.partial) partial.push(note);
     }
-    return reverted;
+    return { reverted, partial };
   }
   // Which required facets a note (with these tags) is missing. Exempt if tagged
   // `shared`, or if the note IS a facet node (tagged with a facet key itself).

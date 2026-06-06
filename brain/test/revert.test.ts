@@ -56,6 +56,7 @@ describe("N6 — reversibility", () => {
     expect(r.status).toBe(200);
     expect(r.body.reverted).toContain(id);
     expect(r.body.reverted).toContain(junk);
+    expect(r.body.partial).toEqual([]); // nothing was compacted, so the revert is complete
 
     // the human's original content is restored…
     const snap = await api("GET", `/spaces/kb/notes/${id}`, admin);
@@ -79,5 +80,43 @@ describe("N6 — reversibility", () => {
   it("requires `since` (won't default to reverting all history)", async () => {
     expect((await api("POST", "/spaces/kb/revert", admin, { principalId: agentId })).status).toBe(400);
     expect((await api("POST", "/spaces/kb/revert", admin, { principalId: agentId, since: "" })).status).toBe(400);
+  });
+});
+
+describe("N6 — reversibility across compaction", () => {
+  it("flags notes as `partial` when the actor's edits were compacted into a snapshot", async () => {
+    const store2 = new SqliteStore(":memory:");
+    const auth = new Auth(store2);
+    const hub = new SpaceHub(store2, { snapshotEvery: 2 }); // compact aggressively
+    const adminTok = auth.bootstrapAdmin()!.token;
+    const bot = auth.createPrincipal("agent", "rogue3");
+    const botTok = auth.issueToken(bot.id);
+    const srv = createHttpServer(hub, auth);
+    await new Promise<void>((r) => srv.listen(0, r));
+    const p = (srv.address() as any).port;
+    const call = async (method: string, path: string, token: string, body?: unknown) => {
+      const res = await fetch(`http://localhost:${p}/v1${path}`, {
+        method,
+        headers: { authorization: `Bearer ${token}`, "content-type": "application/json" },
+        body: body ? JSON.stringify(body) : undefined,
+      });
+      return { status: res.status, body: await res.json().catch(() => null) };
+    };
+    await call("POST", "/spaces", adminTok, { name: "kb2" });
+    await call("PUT", "/spaces/kb2/settings", adminTok, { agentMode: "open" });
+    await call("POST", "/spaces/kb2/members", adminTok, { principalId: bot.id, role: "editor" });
+
+    const T = Date.now();
+    await wait(5);
+    // the agent edits one note many times; with snapshotEvery=2 the early edits get
+    // folded into a snapshot (compacted) and can't be fully reverted.
+    const id = (await call("POST", "/spaces/kb2/notes", botTok, { title: "Doc", body: "v1" })).body.id;
+    for (const v of ["v2", "v3", "v4", "v5"]) await call("PATCH", `/spaces/kb2/notes/${id}`, botTok, { body: v });
+
+    const r = await call("POST", "/spaces/kb2/revert", adminTok, { principalId: bot.id, since: T });
+    expect(r.body.reverted).toContain(id); // tail edits were dropped
+    expect(r.body.partial).toContain(id); // but earlier ones were baked into a snapshot
+    srv.close();
+    store2.close();
   });
 });

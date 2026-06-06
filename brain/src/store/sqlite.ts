@@ -33,7 +33,7 @@ export class SqliteStore implements Store {
       CREATE INDEX IF NOT EXISTS updates_doc ON updates(space, note, seq);
       CREATE INDEX IF NOT EXISTS updates_actor ON updates(space, actor, ts);
       CREATE TABLE IF NOT EXISTS snapshots(
-        space TEXT, note TEXT, seq INTEGER, state BLOB,
+        space TEXT, note TEXT, seq INTEGER, state BLOB, ts INTEGER,
         PRIMARY KEY(space, note));
       CREATE TABLE IF NOT EXISTS nodes(
         space TEXT, id TEXT, title TEXT, tags TEXT, stub INTEGER,
@@ -91,6 +91,11 @@ export class SqliteStore implements Store {
     } catch {
       /* column already exists */
     }
+    try {
+      this.db.exec("ALTER TABLE snapshots ADD COLUMN ts INTEGER");
+    } catch {
+      /* column already exists */
+    }
     for (const col of ["actor TEXT", "ts INTEGER"]) {
       try {
         this.db.exec(`ALTER TABLE updates ADD COLUMN ${col}`);
@@ -117,26 +122,26 @@ export class SqliteStore implements Store {
 
   loadDoc(space: string, note: string): LoadedDoc {
     const snap = this.db
-      .prepare("SELECT seq, state FROM snapshots WHERE space=? AND note=?")
-      .get(space, note) as { seq: number; state: Buffer } | undefined;
+      .prepare("SELECT seq, state, ts FROM snapshots WHERE space=? AND note=?")
+      .get(space, note) as { seq: number; state: Buffer; ts: number | null } | undefined;
     const since = snap ? snap.seq : 0;
     const rows = this.db
       .prepare("SELECT update_blob FROM updates WHERE space=? AND note=? AND seq>? ORDER BY seq")
       .all(space, note, since) as { update_blob: Buffer }[];
-    const snapshot: Snapshot | undefined = snap ? { seq: snap.seq, state: u8(snap.state) } : undefined;
+    const snapshot: Snapshot | undefined = snap ? { seq: snap.seq, state: u8(snap.state), coversTs: snap.ts ?? 0 } : undefined;
     return { snapshot, updates: rows.map((r) => u8(r.update_blob)) };
   }
 
   loadDocMeta(space: string, note: string): { snapshot?: Snapshot; updates: { actor: string; ts: number; bytes: Uint8Array }[] } {
     const snap = this.db
-      .prepare("SELECT seq, state FROM snapshots WHERE space=? AND note=?")
-      .get(space, note) as { seq: number; state: Buffer } | undefined;
+      .prepare("SELECT seq, state, ts FROM snapshots WHERE space=? AND note=?")
+      .get(space, note) as { seq: number; state: Buffer; ts: number | null } | undefined;
     const since = snap ? snap.seq : 0;
     const rows = this.db
       .prepare("SELECT actor, ts, update_blob FROM updates WHERE space=? AND note=? AND seq>? ORDER BY seq")
       .all(space, note, since) as { actor: string | null; ts: number | null; update_blob: Buffer }[];
     return {
-      snapshot: snap ? { seq: snap.seq, state: u8(snap.state) } : undefined,
+      snapshot: snap ? { seq: snap.seq, state: u8(snap.state), coversTs: snap.ts ?? 0 } : undefined,
       updates: rows.map((r) => ({ actor: r.actor ?? "", ts: r.ts ?? 0, bytes: u8(r.update_blob) })),
     };
   }
@@ -150,12 +155,17 @@ export class SqliteStore implements Store {
 
   saveSnapshot(space: string, note: string, state: Uint8Array, seq: number): void {
     const tx = this.db.transaction(() => {
+      // record the newest ts being folded in (carrying forward any prior snapshot's),
+      // so revert can tell whether an actor's edits are now baked-in (unrevertable)
+      const folded = (this.db.prepare("SELECT MAX(ts) AS m FROM updates WHERE space=? AND note=? AND seq<=?").get(space, note, seq) as any)?.m as number | null;
+      const prev = (this.db.prepare("SELECT ts FROM snapshots WHERE space=? AND note=?").get(space, note) as any)?.ts as number | null;
+      const coversTs = Math.max(folded ?? 0, prev ?? 0);
       this.db
         .prepare(
-          `INSERT INTO snapshots(space, note, seq, state) VALUES (?,?,?,?)
-           ON CONFLICT(space, note) DO UPDATE SET seq=excluded.seq, state=excluded.state`,
+          `INSERT INTO snapshots(space, note, seq, state, ts) VALUES (?,?,?,?,?)
+           ON CONFLICT(space, note) DO UPDATE SET seq=excluded.seq, state=excluded.state, ts=excluded.ts`,
         )
-        .run(space, note, seq, buf(state));
+        .run(space, note, seq, buf(state), coversTs);
       // compaction: superseded log entries are now redundant (retention = OQ-3)
       this.db.prepare("DELETE FROM updates WHERE space=? AND note=? AND seq<=?").run(space, note, seq);
     });
