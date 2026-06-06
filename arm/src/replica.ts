@@ -94,7 +94,8 @@ export class Replica {
   }
 
   private onMessage(msg: ServerMsg): void {
-    if (msg.t === "error") return;
+    // the arm only cares about per-note sync frames (it never subscribes)
+    if (msg.t !== "sync1" && msg.t !== "sync2" && msg.t !== "update") return;
     const doc = this.ensureDoc(msg.note);
     switch (msg.t) {
       case "sync2":

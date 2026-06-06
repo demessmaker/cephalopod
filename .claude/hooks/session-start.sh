@@ -10,7 +10,7 @@ fi
 
 ROOT="${CLAUDE_PROJECT_DIR:-$(pwd)}"
 
-for pkg in brain mcp arm web spike; do
+for pkg in core brain mcp arm web spike; do
   if [ -f "$ROOT/$pkg/package.json" ]; then
     echo "[session-start] installing deps for $pkg…"
     (cd "$ROOT/$pkg" && npm install --no-audit --no-fund)

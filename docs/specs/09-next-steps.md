@@ -81,10 +81,12 @@ with the role — they only narrow it. Implemented:
   body-size limit (`413`), WS auth via `Authorization` header / `bearer`
   subprotocol with `?token=` fallback (the CLI arm now uses the header). Structured
   request logging still TODO.
-- **Extract `@cephalopod/core`** — kill the triplicated `note`/`ids`/`protocol`/
-  `wikilinks` across `brain`/`arm`/`spike`; single source of truth. ‹next›
+- **Extract `@cephalopod/core`** — ✅ done: canonical `ids`/`note`/`wikilinks`/
+  `protocol` live in `/core`; `brain` and `arm` re-export them via thin
+  `src/core/*` shims (call sites unchanged). Surfaced + fixed a latent null-byte
+  in the `docKey` separator. (`spike` keeps its frozen M0 copy.)
 - **Migration runner** — replace the ad-hoc guarded `ALTER` with ordered, recorded
-  migrations (matters as the schema keeps evolving here).
+  migrations (matters as the schema keeps evolving here). ‹next›
 
 ## Deferred tracks (revisit if direction shifts)
 - **C — Scale (SaaS):** Postgres `Store`, relay sharding (NATS/Redis fan-out),

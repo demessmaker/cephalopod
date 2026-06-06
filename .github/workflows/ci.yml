@@ -14,11 +14,11 @@ jobs:
         with:
           node-version: "22"
 
-      # Install deps for every package. mcp/arm/web integration tests import the
-      # brain's source directly, so the brain's deps must be present too.
+      # Install deps for every package (core first — brain/arm import it; and the
+      # mcp/arm/web integration tests import brain's source, so it needs deps too).
       - name: Install dependencies
         run: |
-          for pkg in brain mcp arm web spike; do
+          for pkg in core brain mcp arm web spike; do
             echo "::group::install $pkg"
             (cd "$pkg" && npm install --no-audit --no-fund)
             echo "::endgroup::"
@@ -26,7 +26,7 @@ jobs:
 
       - name: Typecheck (TS packages)
         run: |
-          for pkg in brain mcp arm; do
+          for pkg in core brain mcp arm; do
             echo "::group::typecheck $pkg"
             (cd "$pkg" && npx tsc --noEmit)
             echo "::endgroup::"
@@ -34,7 +34,7 @@ jobs:
 
       - name: Test
         run: |
-          for pkg in brain mcp arm web spike; do
+          for pkg in core brain mcp arm web spike; do
             echo "::group::test $pkg"
             (cd "$pkg" && npm test)
             echo "::endgroup::"

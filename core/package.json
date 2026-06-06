@@ -1,0 +1,17 @@
+{
+  "name": "@cephalopod/core",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Shared core: note schema, ids, wikilink derivation, wire protocol.",
+  "scripts": { "test": "vitest run", "typecheck": "tsc --noEmit" },
+  "dependencies": {
+    "@noble/hashes": "^1.5.0",
+    "yjs": "^13.6.20"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.0",
+    "typescript": "^5.7.2",
+    "vitest": "^2.1.8"
+  }
+}
