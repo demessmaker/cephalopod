@@ -18,6 +18,8 @@ import {
 } from "./core/protocol.js";
 import type { Store } from "./store/store.js";
 import { HashingEmbedder, type Embedder } from "./embedder.js";
+import { scanSecrets } from "./secrets.js";
+import type { Capabilities } from "./auth.js";
 
 type ServerConn = Conn<ServerMsg, ClientMsg>;
 
@@ -29,6 +31,7 @@ export interface ConnAuth {
   canWrite(space: string): boolean;
   kind?: "agent" | "user";
   principalId?: string; // attributes log entries (for blame / revert)
+  caps?: Capabilities; // capability scope (writeTags/pathPrefix) — enforced on WS writes too
 }
 export const ALLOW_ALL: ConnAuth = { canRead: () => true, canWrite: () => true };
 
@@ -99,7 +102,10 @@ export class SpaceHub {
     for (const u of updates) Y.applyUpdate(doc, u, "load");
     st = { doc, lastSeq: 0, sinceSnap: 0 };
     this.docs.set(key, st);
-    this.reindex(space, note, doc); // ensure derived index reflects loaded state
+    // Refresh the derived index from loaded state, but don't index a note that
+    // has never been written (e.g. a bare `open`/`sync1` on a non-existent id) —
+    // that would seed a phantom empty node and inflate quota counts.
+    if (snapshot || updates.length) this.reindex(space, note, doc);
     return st;
   }
 
@@ -147,30 +153,100 @@ export class SpaceHub {
   }
 
   private applyClientDelta(conn: ConnState, space: string, note: string, bytes: Uint8Array, raw: string): void {
+    // Quota is checked BEFORE the note is loaded, so we don't seed a phantom doc
+    // or inflate the count (parity with the HTTP create path, which checks first).
+    const existed = this.hasNote(space, note);
+    if (!existed && this.quotaExceeded(space)) {
+      return this.denyWrite(conn, "quota_exceeded", `space "${space}" note quota reached`, note);
+    }
     const st = this.getDoc(space, note);
+    // A CRDT delta can't be *rejected* after it's applied. For hard policy
+    // violations (capability scope, secret-block) we therefore apply, inspect the
+    // resulting note, and roll back to its pre-delta state — so nothing the gate
+    // rejects is ever persisted or fanned out. The pre-image is only captured
+    // when a rejection is actually possible, to keep the common path cheap.
+    const caps = conn.auth.caps;
+    const mayReject = !!(caps?.writeTags?.length || caps?.pathPrefix) || this.getSecretScan(space) === "block";
+    const before = mayReject ? Y.encodeStateAsUpdate(st.doc) : null;
     Y.applyUpdate(st.doc, bytes, conn); // origin = conn
+    if (mayReject) {
+      const violation = this.writeViolation(conn, space, note);
+      if (violation) {
+        this.rollbackWrite(space, note, st, before!, existed);
+        return this.denyWrite(conn, violation.code, violation.message, note);
+      }
+    }
     this.commit(space, note, st, bytes, raw, conn, conn.auth.principalId ?? "unknown");
     this.enforceAgentWrite(conn, space, note); // N2: WS writes obey agent policy too
   }
 
-  // Post-hoc enforcement of agent policy on WS writes (05 §4). A CRDT delta can't
-  // be rejected after it's applied, so we *correct*: stamp provenance, force
-  // #draft in draft-mode spaces (an agent can't publish via WS), and quarantine
-  // facet-less notes with #needs-facets. Humans (kind !== "agent") are untouched.
+  // Hard write gates that mirror the HTTP path's `inScope` + secret-block, run
+  // against the note's post-apply state. Returns the denial to send, or null if
+  // the write is allowed. Capability scope applies to every writer (a scoped
+  // human token is constrained too); secret-block applies per space policy.
+  private writeViolation(conn: ConnState, space: string, note: string): { code: string; message: string } | null {
+    const caps = conn.auth.caps;
+    const snap = this.getNoteSnapshot(space, note);
+    if (caps?.writeTags?.length && !caps.writeTags.some((t) => snap.tags.includes(t))) {
+      return { code: "scope_denied", message: `token may only write notes tagged: ${caps.writeTags.join(", ")}` };
+    }
+    if (caps?.pathPrefix && !String(snap.props.path ?? "").startsWith(caps.pathPrefix)) {
+      return { code: "scope_denied", message: `token scoped to path "${caps.pathPrefix}"` };
+    }
+    if (this.getSecretScan(space) === "block" && scanSecrets(`${snap.title}\n${snap.body}`).length > 0) {
+      return { code: "secret_suspected", message: "possible secret detected — write rejected" };
+    }
+    return null;
+  }
+
+  // Undo an in-memory delta that violated a hard gate (it was never committed).
+  // A note that didn't exist before is fully evicted, including the derived-index
+  // rows getDoc() seeded; an existing note is rebuilt from its last-committed
+  // state captured in `before`.
+  private rollbackWrite(space: string, note: string, st: DocState, before: Uint8Array, existed: boolean): void {
+    const key = docKey(space, note);
+    if (existed) {
+      const fresh = new Y.Doc();
+      Y.applyUpdate(fresh, before, "load");
+      st.doc = fresh;
+      this.reindex(space, note, fresh);
+    } else {
+      this.docs.delete(key);
+      this.store.deleteNode(space, note);
+      this.store.searchDelete(space, note);
+      this.store.deleteEmbedding(space, note);
+      this.store.replaceEdgesFrom(space, note, []);
+    }
+  }
+
+  private denyWrite(conn: ConnState, code: string, message: string, note: string): void {
+    conn.ch.send({ t: "error", code, message, ref: note });
+  }
+
+  // Post-apply *corrections* on committed WS writes (05 §4–5). A CRDT delta can't
+  // be rejected, so for soft policy we correct: in "warn" secret mode any writer's
+  // note with a suspected secret is tagged #secret-suspected; agents are stamped
+  // with provenance, forced to #draft in draft-mode spaces (they can't publish via
+  // WS), and quarantined with #needs-facets when required facets are missing.
   private enforceAgentWrite(conn: ConnState, space: string, note: string): void {
-    if (conn.auth.kind !== "agent") return;
     const doc = this.docs.get(docKey(space, note))?.doc;
     if (!doc) return;
     const h = handle(note, doc);
     if (h.meta.get("deleted")) return;
     const tags = h.tags.toArray();
-    const needStamp = h.props.get("authoredBy") !== "agent";
-    const needDraft = this.getAgentMode(space) === "draft" && !tags.includes("draft");
-    const needFacets = this.missingFacets(space, tags).length > 0 && !tags.includes("needs-facets");
-    if (!needStamp && !needDraft && !needFacets) return;
+    const isAgent = conn.auth.kind === "agent";
+    const needSecretTag =
+      this.getSecretScan(space) === "warn" &&
+      !tags.includes("secret-suspected") &&
+      scanSecrets(`${getTitle(h)}\n${h.body.toString()}`).length > 0;
+    const needStamp = isAgent && h.props.get("authoredBy") !== "agent";
+    const needDraft = isAgent && this.getAgentMode(space) === "draft" && !tags.includes("draft");
+    const needFacets = isAgent && this.missingFacets(space, tags).length > 0 && !tags.includes("needs-facets");
+    if (!needSecretTag && !needStamp && !needDraft && !needFacets) return;
     this.applyLocalEdit(space, note, (hh) => {
       if (needStamp) hh.props.set("authoredBy", "agent");
       const t = hh.tags.toArray();
+      if (needSecretTag && !t.includes("secret-suspected")) hh.tags.push(["secret-suspected"]);
       if (needDraft && !t.includes("draft")) hh.tags.push(["draft"]);
       if (needFacets && !t.includes("needs-facets")) hh.tags.push(["needs-facets"]);
     });

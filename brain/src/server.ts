@@ -40,6 +40,7 @@ wss.on("connection", (sock, req) => {
         canWrite: (s) => can(auth.roleOf(s, p.id), "write") && caps.mode !== "read", // read-only tokens can't write over WS
         kind: p.kind,
         principalId: p.id,
+        caps, // capability scope (writeTags/pathPrefix) enforced on the WS write path
       }
     : { canRead: () => false, canWrite: () => false };
   const conn = hub.addConnection(wsConn<ServerMsg, ClientMsg>(sock), connAuth);
