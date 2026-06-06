@@ -93,15 +93,25 @@ function wsWrite(token: string, space: string, note: string, f: Fields) {
     const update = Y.encodeStateAsUpdate(doc);
     const ws = new WebSocket(`ws://localhost:${wsPort}?token=${token}`);
     let error: { code: string; message: string } | undefined;
+    let done = false;
+    const finish = () => {
+      if (done) return;
+      done = true;
+      ws.close();
+      resolve({ error });
+    };
     ws.on("error", reject);
     ws.on("message", (raw) => {
       const msg = JSON.parse(raw.toString());
-      if (msg.t === "error") error = { code: msg.code, message: msg.message };
+      if (msg.t === "error") {
+        error = { code: msg.code, message: msg.message };
+        finish(); // a denial is the terminal signal — resolve immediately (no flaky wait)
+      }
     });
     ws.on("open", () => {
       ws.send(JSON.stringify({ t: "open", space, note }));
       ws.send(JSON.stringify({ t: "update", space, note, update: b64.enc(update) }));
-      setTimeout(() => { ws.close(); resolve({ error }); }, 200);
+      setTimeout(finish, 400); // success window (no error expected)
     });
   });
 }
@@ -177,7 +187,7 @@ describe("WS write gates — parity with the HTTP path", () => {
 
     // a follow-up edit that introduces a secret must be rejected AND rolled back,
     // leaving the previously-committed content untouched.
-    const denied = await wsWrite(token, "rollback", "n_doc", { body: "now with AKIAIOSFODNN7EXAMPLE" });
+    const denied = await wsWrite(token, "rollback", "n_doc", { body: "now leaking AKIAIOSFODNN7EXAMPLE here" });
     expect(denied.error?.code).toBe("secret_suspected");
     const snap = await http("GET", "/spaces/rollback/notes/n_doc", adminToken);
     expect(snap.body.body).toBe("original safe content"); // edit rolled back, secret never persisted
