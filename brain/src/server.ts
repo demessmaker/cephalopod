@@ -6,6 +6,7 @@ import { SpaceHub, type ConnAuth } from "./hub.js";
 import { Auth, can } from "./auth.js";
 import { createHttpServer } from "./http.js";
 import { wsConn } from "./ws.js";
+import { tokenFromUpgrade } from "./wsauth.js";
 import type { ClientMsg, ServerMsg } from "./core/protocol.js";
 
 const WS_PORT = Number(process.env.CEPH_PORT ?? 7700);
@@ -30,7 +31,7 @@ http.listen(HTTP_PORT, () => console.log(`🐙 brain HTTP API on http://localhos
 // WS sync relay — authenticate via ?token= and enforce per-space ACL.
 const wss = new WebSocketServer({ port: WS_PORT });
 wss.on("connection", (sock, req) => {
-  const token = new URL(req.url ?? "/", "http://localhost").searchParams.get("token") ?? undefined;
+  const token = tokenFromUpgrade(req);
   const p = auth.authenticate(token);
   const caps = auth.capabilities(token);
   const connAuth: ConnAuth = p

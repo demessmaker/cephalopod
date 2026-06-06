@@ -77,12 +77,14 @@ with the role — they only narrow it. Implemented:
   agent damage"; deeper time-travel would need per-actor snapshot retention.
 
 ## Hardening backlog (Track A — fold in opportunistically)
+- **Server hardening** — ✅ done: `/healthz` (+ Docker healthcheck), request
+  body-size limit (`413`), WS auth via `Authorization` header / `bearer`
+  subprotocol with `?token=` fallback (the CLI arm now uses the header). Structured
+  request logging still TODO.
 - **Extract `@cephalopod/core`** — kill the triplicated `note`/`ids`/`protocol`/
-  `wikilinks` across `brain`/`arm`/`spike`; single source of truth.
+  `wikilinks` across `brain`/`arm`/`spike`; single source of truth. ‹next›
 - **Migration runner** — replace the ad-hoc guarded `ALTER` with ordered, recorded
   migrations (matters as the schema keeps evolving here).
-- **Server hardening** — request body-size limits, WS token via header/subprotocol
-  (not URL query, which leaks into logs), `/healthz`, structured request logging.
 
 ## Deferred tracks (revisit if direction shifts)
 - **C — Scale (SaaS):** Postgres `Store`, relay sharding (NATS/Redis fan-out),

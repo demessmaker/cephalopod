@@ -37,6 +37,10 @@ HTTP API, full-text search, and token-based per-space access control.
 - ✅ **Reversibility** (`05 §4`) — the log records `actor`+`ts`; admin
   `POST /spaces/:s/revert {principalId, since}` undoes a principal's recent edits
   (replay tail without them → attributed overwrite), preserving others'.
+- ✅ **Hardening** — unauthenticated `/healthz` (Docker healthcheck), request
+  body-size limit (`413 payload_too_large`, `maxBodyBytes`), and WS auth via the
+  `Authorization` header / `bearer` subprotocol (with `?token=` fallback) so tokens
+  stay out of URLs/logs.
 - ✅ **Obsidian vault importer** (`08`) — two-pass, idempotent, in-process bulk
   import: files→notes, `[[wikilinks]]`→edges (id-rewrite + stubs), frontmatter→
   tags/props, `![[embeds]]`→embeds edges, `cephalopod_id` write-back.

@@ -11,6 +11,7 @@ import { SpaceHub, type ConnAuth } from "../../brain/src/hub.js";
 import { Auth, can } from "../../brain/src/auth.js";
 import { createHttpServer } from "../../brain/src/http.js";
 import { wsConn } from "../../brain/src/ws.js";
+import { tokenFromUpgrade } from "../../brain/src/wsauth.js";
 import type { ClientMsg, ServerMsg } from "../../brain/src/core/protocol.js";
 import { Replica, type ReplicaOptions } from "../src/replica.js";
 
@@ -42,7 +43,7 @@ beforeAll(async () => {
 
   wss = new WebSocketServer({ port: 0 });
   wss.on("connection", (sock, req) => {
-    const tok = new URL(req.url ?? "/", "http://x").searchParams.get("token") ?? undefined;
+    const tok = tokenFromUpgrade(req); // header (arm) or ?token= fallback
     const p = auth.authenticate(tok);
     const cAuth: ConnAuth = p
       ? { canRead: (s) => can(auth.roleOf(s, p.id), "read"), canWrite: (s) => can(auth.roleOf(s, p.id), "write") }

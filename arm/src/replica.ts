@@ -61,7 +61,8 @@ export class Replica {
 
   connect(): Promise<void> {
     return new Promise((resolve, reject) => {
-      const ws = new WebSocket(`${this.o.wsUrl}?token=${encodeURIComponent(this.o.token)}`);
+      // token via Authorization header (not the URL) so it doesn't leak into logs
+      const ws = new WebSocket(this.o.wsUrl, { headers: { authorization: `Bearer ${this.o.token}` } });
       ws.on("open", () => {
         this.ws = ws;
         this.connected = true;

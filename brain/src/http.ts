@@ -10,6 +10,7 @@ import { scanSecrets } from "./secrets.js";
 
 export interface HttpOptions {
   rateLimit?: { capacity: number; refillPerSec: number }; // per-token request rate
+  maxBodyBytes?: number; // reject larger request bodies with 413 (default 1 MiB)
 }
 
 interface Ctx {
@@ -319,8 +320,17 @@ export function createHttpServer(hub: SpaceHub, auth: Auth, opts: HttpOptions = 
     err(c.res, 400, "query needs match.text, match.semantic, or traverse.from");
   });
 
+  const maxBody = opts.maxBodyBytes ?? 1_000_000;
+
   const server = createServer((req, res) => {
     const url = new URL(req.url ?? "/", "http://localhost");
+
+    // unauthenticated liveness check (for containers/orchestration)
+    if (url.pathname === "/healthz") {
+      res.writeHead(200, { "content-type": "application/json" });
+      return res.end(JSON.stringify({ status: "ok" }));
+    }
+
     const token = req.headers.authorization?.replace(/^Bearer\s+/i, "");
     const principal = auth.authenticate(token);
     if (!principal) return err(res, 401, "unauthorized");
@@ -331,8 +341,19 @@ export function createHttpServer(hub: SpaceHub, auth: Auth, opts: HttpOptions = 
     const caps = auth.capabilities(token);
 
     let raw = "";
-    req.on("data", (d) => (raw += d));
+    let aborted = false;
+    req.on("data", (d) => {
+      if (aborted) return;
+      raw += d;
+      if (raw.length > maxBody) {
+        aborted = true;
+        res.writeHead(413, { "content-type": "application/json" });
+        res.end(JSON.stringify({ error: "request body too large", code: "payload_too_large" }));
+        req.destroy();
+      }
+    });
     req.on("end", () => {
+      if (aborted) return;
       let body: any = undefined;
       if (raw) {
         try {
