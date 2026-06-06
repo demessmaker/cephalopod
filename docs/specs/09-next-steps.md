@@ -62,10 +62,19 @@ with the role — they only narrow it. Implemented:
   block-rejects / off; purge removes a note from reads + search + log (a fresh
   store wouldn't rehydrate it); non-admin purge denied.
 
-### N6 — Reversibility  ‹med› (`05 §4`)
-Admin "revert principal X's edits since T" by applying inverse CRDT deltas (soft,
-history-preserving). Critical safety valve for agent-poisoned knowledge.
-**Acceptance:** an admin reverts an agent's last-hour edits; prior human edits survive.
+### N6 — Reversibility ✅ (done) (`05 §4`)
+- The update log now records `actor` + `ts` per delta (blame/revert).
+- `POST /spaces/:s/revert {principalId, since}` (admin): for each note the actor
+  touched since `T`, reconstruct a "clean" doc by replaying the retained log tail
+  *without* that actor's `ts >= T` deltas, then overwrite the live doc with the
+  clean content via a new, attributed (`actor:"revert"`) edit — history-preserving,
+  converges to arms. Audited.
+- **Verified** (`brain/test/revert.test.ts`): an agent's poisoning of a human note
+  is undone (original body/tags restored) and its junk note emptied, while the
+  human's earlier edits survive; admin-only; `since` validated.
+- *Limitation:* only edits still in the un-compacted log tail can be reverted
+  (edits folded into a snapshot are not separable). Good enough for "undo recent
+  agent damage"; deeper time-travel would need per-actor snapshot retention.
 
 ## Hardening backlog (Track A — fold in opportunistically)
 - **Extract `@cephalopod/core`** — kill the triplicated `note`/`ids`/`protocol`/
@@ -87,11 +96,12 @@ history-preserving). Critical safety valve for agent-poisoned knowledge.
 ## Sequencing
 
 ```
-N1 CI ✅ → N2 WS policy → N3 capability tokens → N4 rate limits
-         → N5 secret-scan/purge → N6 revert
-   (extract core + migration runner folded in around N2–N3)
+N1 CI ✅ → N2 WS policy ✅ → N3 capability tokens ✅ → N4 rate limits ✅
+         → N5 secret-scan/purge ✅ → N6 revert ✅          ← agent-safety track COMPLETE
 ```
 
-N2–N6 together make the system **safe to hand to autonomous agents at volume** —
-the point of the chosen direction. Scale (C) and rich UX (D) wait until there's a
-reason (a SaaS tenant, or a human-editing push).
+The agent-safety track is done: agents are **gated** (draft), **scoped**
+(capability tokens), **bounded** (rate/quota), **screened** (secret-scan), and
+**reversible** (purge + revert). Remaining hardening backlog (extract
+`@cephalopod/core`, migration runner, server hardening) and the deferred
+scale/UX/ops tracks stay available; pick them up when there's a reason.

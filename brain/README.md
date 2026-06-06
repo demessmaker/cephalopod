@@ -34,6 +34,9 @@ HTTP API, full-text search, and token-based per-space access control.
   (`secretScan: off|warn|block`; warn → `#secret-suspected`, block → 422) and an
   admin `POST /notes/:id/purge` that expunges all traces (log/snapshots/index/
   search/embeddings) + audit log.
+- ✅ **Reversibility** (`05 §4`) — the log records `actor`+`ts`; admin
+  `POST /spaces/:s/revert {principalId, since}` undoes a principal's recent edits
+  (replay tail without them → attributed overwrite), preserving others'.
 - ✅ **Obsidian vault importer** (`08`) — two-pass, idempotent, in-process bulk
   import: files→notes, `[[wikilinks]]`→edges (id-rewrite + stubs), frontmatter→
   tags/props, `![[embeds]]`→embeds edges, `cephalopod_id` write-back.

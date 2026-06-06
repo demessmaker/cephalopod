@@ -21,8 +21,9 @@ export class SqliteStore implements Store {
       CREATE TABLE IF NOT EXISTS spaces(name TEXT PRIMARY KEY);
       CREATE TABLE IF NOT EXISTS updates(
         seq INTEGER PRIMARY KEY AUTOINCREMENT,
-        space TEXT, note TEXT, update_blob BLOB);
+        space TEXT, note TEXT, update_blob BLOB, actor TEXT, ts INTEGER);
       CREATE INDEX IF NOT EXISTS updates_doc ON updates(space, note, seq);
+      CREATE INDEX IF NOT EXISTS updates_actor ON updates(space, actor, ts);
       CREATE TABLE IF NOT EXISTS snapshots(
         space TEXT, note TEXT, seq INTEGER, state BLOB,
         PRIMARY KEY(space, note));
@@ -82,6 +83,13 @@ export class SqliteStore implements Store {
     } catch {
       /* column already exists */
     }
+    for (const col of ["actor TEXT", "ts INTEGER"]) {
+      try {
+        this.db.exec(`ALTER TABLE updates ADD COLUMN ${col}`);
+      } catch {
+        /* column already exists */
+      }
+    }
   }
 
   ensureSpace(space: string): void {
@@ -91,11 +99,11 @@ export class SqliteStore implements Store {
     return this.db.prepare("SELECT name FROM spaces ORDER BY name").all().map((r: any) => r.name);
   }
 
-  appendUpdate(space: string, note: string, update: Uint8Array): number {
+  appendUpdate(space: string, note: string, update: Uint8Array, actor: string, ts: number): number {
     this.ensureSpace(space);
     const info = this.db
-      .prepare("INSERT INTO updates(space, note, update_blob) VALUES (?,?,?)")
-      .run(space, note, buf(update));
+      .prepare("INSERT INTO updates(space, note, update_blob, actor, ts) VALUES (?,?,?,?,?)")
+      .run(space, note, buf(update), actor, ts);
     return Number(info.lastInsertRowid);
   }
 
@@ -109,6 +117,27 @@ export class SqliteStore implements Store {
       .all(space, note, since) as { update_blob: Buffer }[];
     const snapshot: Snapshot | undefined = snap ? { seq: snap.seq, state: u8(snap.state) } : undefined;
     return { snapshot, updates: rows.map((r) => u8(r.update_blob)) };
+  }
+
+  loadDocMeta(space: string, note: string): { snapshot?: Snapshot; updates: { actor: string; ts: number; bytes: Uint8Array }[] } {
+    const snap = this.db
+      .prepare("SELECT seq, state FROM snapshots WHERE space=? AND note=?")
+      .get(space, note) as { seq: number; state: Buffer } | undefined;
+    const since = snap ? snap.seq : 0;
+    const rows = this.db
+      .prepare("SELECT actor, ts, update_blob FROM updates WHERE space=? AND note=? AND seq>? ORDER BY seq")
+      .all(space, note, since) as { actor: string | null; ts: number | null; update_blob: Buffer }[];
+    return {
+      snapshot: snap ? { seq: snap.seq, state: u8(snap.state) } : undefined,
+      updates: rows.map((r) => ({ actor: r.actor ?? "", ts: r.ts ?? 0, bytes: u8(r.update_blob) })),
+    };
+  }
+  notesTouchedBy(space: string, actor: string, sinceTs: number): string[] {
+    return (
+      this.db
+        .prepare("SELECT DISTINCT note FROM updates WHERE space=? AND actor=? AND ts>=?")
+        .all(space, actor, sinceTs) as any[]
+    ).map((r) => r.note);
   }
 
   saveSnapshot(space: string, note: string, state: Uint8Array, seq: number): void {

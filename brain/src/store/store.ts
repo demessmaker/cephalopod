@@ -22,13 +22,25 @@ export interface LoadedDoc {
   updates: Uint8Array[]; // tail with seq > snapshot.seq, in order
 }
 
+export interface MetaUpdate {
+  actor: string;
+  ts: number;
+  bytes: Uint8Array;
+}
+export interface LoadedDocMeta {
+  snapshot?: Snapshot;
+  updates: MetaUpdate[];
+}
+
 export interface Store {
   ensureSpace(space: string): void;
   listSpaces(): string[];
 
   // --- authoritative log + snapshots (per note doc) ---
-  appendUpdate(space: string, note: string, update: Uint8Array): number; // -> seq
+  appendUpdate(space: string, note: string, update: Uint8Array, actor: string, ts: number): number; // -> seq
   loadDoc(space: string, note: string): LoadedDoc;
+  loadDocMeta(space: string, note: string): LoadedDocMeta; // tail with actor/ts (for revert)
+  notesTouchedBy(space: string, actor: string, sinceTs: number): string[];
   saveSnapshot(space: string, note: string, state: Uint8Array, seq: number): void;
 
   // --- derived graph index (rebuildable) ---

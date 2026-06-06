@@ -28,6 +28,7 @@ export interface ConnAuth {
   canRead(space: string): boolean;
   canWrite(space: string): boolean;
   kind?: "agent" | "user";
+  principalId?: string; // attributes log entries (for blame / revert)
 }
 export const ALLOW_ALL: ConnAuth = { canRead: () => true, canWrite: () => true };
 
@@ -148,7 +149,7 @@ export class SpaceHub {
   private applyClientDelta(conn: ConnState, space: string, note: string, bytes: Uint8Array, raw: string): void {
     const st = this.getDoc(space, note);
     Y.applyUpdate(st.doc, bytes, conn); // origin = conn
-    this.commit(space, note, st, bytes, raw, conn);
+    this.commit(space, note, st, bytes, raw, conn, conn.auth.principalId ?? "unknown");
     this.enforceAgentWrite(conn, space, note); // N2: WS writes obey agent policy too
   }
 
@@ -176,9 +177,9 @@ export class SpaceHub {
   }
 
   // Shared persist + index + snapshot + fan-out path for both WS deltas and
-  // server-side (HTTP/MCP) edits.
-  private commit(space: string, note: string, st: DocState, bytes: Uint8Array, raw: string, except?: ConnState): void {
-    st.lastSeq = this.store.appendUpdate(space, note, bytes); // append-only log (04 §2.3)
+  // server-side (HTTP/MCP) edits. `actor` attributes the log entry (blame/revert).
+  private commit(space: string, note: string, st: DocState, bytes: Uint8Array, raw: string, except: ConnState | undefined, actor: string): void {
+    st.lastSeq = this.store.appendUpdate(space, note, bytes, actor, Date.now()); // append-only log (04 §2.3)
     this.reindex(space, note, st.doc); // refresh derived index + FTS
     if (++st.sinceSnap >= this.snapshotEvery) this.snapshot(space, note, st);
     const key = docKey(space, note);
@@ -190,7 +191,7 @@ export class SpaceHub {
 
   // Apply a server-side edit (HTTP/MCP) through the same write path as WS deltas,
   // so all writers converge (02 §2.1). Captures the resulting CRDT update.
-  private applyLocalEdit(space: string, note: string, fn: (h: NoteHandle) => void): void {
+  private applyLocalEdit(space: string, note: string, fn: (h: NoteHandle) => void, actor = "system"): void {
     const st = this.getDoc(space, note);
     let captured: Uint8Array | null = null;
     const onUpdate = (u: Uint8Array, origin: unknown) => {
@@ -199,12 +200,12 @@ export class SpaceHub {
     st.doc.on("update", onUpdate);
     st.doc.transact(() => fn(handle(note, st.doc)), "http");
     st.doc.off("update", onUpdate);
-    if (captured) this.commit(space, note, st, captured, b64.enc(captured));
+    if (captured) this.commit(space, note, st, captured, b64.enc(captured), undefined, actor);
   }
 
   // ---- HTTP/MCP command surface (03 §2) ----------------------------------
 
-  createNote(space: string, fields: NoteFields, id = newNoteId()): string {
+  createNote(space: string, fields: NoteFields, id = newNoteId(), actor = "system"): string {
     this.store.ensureSpace(space);
     this.applyLocalEdit(space, id, (h) => {
       h.meta.set("createdAt", new Date().toISOString());
@@ -212,11 +213,11 @@ export class SpaceHub {
       if (fields.body) h.body.insert(0, fields.body);
       if (fields.tags) for (const t of fields.tags) h.tags.push([t]);
       if (fields.props) for (const [k, v] of Object.entries(fields.props)) h.props.set(k, v);
-    });
+    }, actor);
     return id;
   }
 
-  patchNote(space: string, note: string, patch: NoteFields): void {
+  patchNote(space: string, note: string, patch: NoteFields, actor = "system"): void {
     this.applyLocalEdit(space, note, (h) => {
       if (patch.title !== undefined) h.meta.set("title", patch.title);
       if (patch.body !== undefined) {
@@ -228,18 +229,18 @@ export class SpaceHub {
         for (const t of patch.tags) h.tags.push([t]);
       }
       if (patch.props) for (const [k, v] of Object.entries(patch.props)) h.props.set(k, v);
-    });
+    }, actor);
   }
 
-  deleteNote(space: string, note: string): void {
-    this.applyLocalEdit(space, note, (h) => h.meta.set("deleted", true));
+  deleteNote(space: string, note: string, actor = "system"): void {
+    this.applyLocalEdit(space, note, (h) => h.meta.set("deleted", true), actor);
   }
 
-  linkNote(space: string, from: string, to: string, type: string | null = null): void {
-    this.applyLocalEdit(space, from, (h) => h.outLinks.set(edgeId(from, to, type), { to, type }));
+  linkNote(space: string, from: string, to: string, type: string | null = null, actor = "system"): void {
+    this.applyLocalEdit(space, from, (h) => h.outLinks.set(edgeId(from, to, type), { to, type }), actor);
   }
-  unlinkNote(space: string, from: string, to: string, type: string | null = null): void {
-    this.applyLocalEdit(space, from, (h) => h.outLinks.delete(edgeId(from, to, type)));
+  unlinkNote(space: string, from: string, to: string, type: string | null = null, actor = "system"): void {
+    this.applyLocalEdit(space, from, (h) => h.outLinks.delete(edgeId(from, to, type)), actor);
   }
 
   getNoteSnapshot(space: string, note: string): NoteSnapshot {
@@ -331,6 +332,55 @@ export class SpaceHub {
   purgeNote(space: string, note: string): void {
     this.store.purgeNote(space, note);
     this.docs.delete(docKey(space, note));
+  }
+
+  // Reversibility (05 §4): undo a principal's edits to a note since `sinceTs` by
+  // replaying the retained log tail WITHOUT those deltas, then overwriting the
+  // live doc with the reconstructed "clean" content. History-preserving (the
+  // revert is itself a new, attributed edit). Returns true if anything changed.
+  // Limitation: only edits still in the un-compacted tail can be reverted.
+  private revertNote(space: string, note: string, actor: string, sinceTs: number): boolean {
+    const { snapshot, updates } = this.store.loadDocMeta(space, note);
+    const clean = new Y.Doc();
+    if (snapshot) Y.applyUpdate(clean, snapshot.state, "load");
+    let changed = false;
+    for (const u of updates) {
+      if (u.actor === actor && u.ts >= sinceTs) {
+        changed = true;
+        continue; // drop this delta
+      }
+      Y.applyUpdate(clean, u.bytes, "load");
+    }
+    if (!changed) return false;
+    const c = handle(note, clean);
+    this.applyLocalEdit(
+      space,
+      note,
+      (h) => {
+        h.meta.set("title", (c.meta.get("title") as string) ?? ""); // clear if clean had none
+        h.meta.set("deleted", !!c.meta.get("deleted"));
+        h.body.delete(0, h.body.length);
+        h.body.insert(0, c.body.toString());
+        h.tags.delete(0, h.tags.length);
+        for (const t of c.tags.toArray()) h.tags.push([t]);
+        const want = c.props.toJSON() as Record<string, unknown>;
+        for (const k of [...h.props.keys()]) if (!(k in want)) h.props.delete(k);
+        for (const [k, v] of Object.entries(want)) h.props.set(k, v);
+        for (const k of [...h.outLinks.keys()]) if (!c.outLinks.has(k)) h.outLinks.delete(k);
+        for (const [k, v] of c.outLinks.entries()) h.outLinks.set(k, v);
+      },
+      "revert",
+    );
+    return true;
+  }
+
+  // Revert all of a principal's edits across the space since `sinceTs`.
+  revertActor(space: string, actor: string, sinceTs: number): string[] {
+    const reverted: string[] = [];
+    for (const note of this.store.notesTouchedBy(space, actor, sinceTs)) {
+      if (this.revertNote(space, note, actor, sinceTs)) reverted.push(note);
+    }
+    return reverted;
   }
   // Which required facets a note (with these tags) is missing. Exempt if tagged
   // `shared`, or if the note IS a facet node (tagged with a facet key itself).

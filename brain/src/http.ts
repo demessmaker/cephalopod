@@ -192,7 +192,7 @@ export function createHttpServer(hub: SpaceHub, auth: Auth, opts: HttpOptions = 
       c.res.writeHead(429, { "content-type": "application/json" });
       return c.res.end(JSON.stringify({ error: "space note quota reached", code: "quota_exceeded" }));
     }
-    const id = hub.createNote(c.params.space, fields, c.body?.id);
+    const id = hub.createNote(c.params.space, fields, c.body?.id, c.principal.id);
     json(c.res, 201, { id, draft: gated(c) });
   });
   route("GET", "/spaces/:space/notes", (c) => {
@@ -222,7 +222,7 @@ export function createHttpServer(hub: SpaceHub, auth: Auth, opts: HttpOptions = 
       patch.props = { ...(patch.props ?? {}), authoredBy: "agent" };
     }
     if (patch.tags !== undefined && facetError(c, patch.tags)) return; // enforce on explicit tag changes
-    hub.patchNote(c.params.space, c.params.id, patch);
+    hub.patchNote(c.params.space, c.params.id, patch, c.principal.id);
     json(c.res, 200, hub.getNoteSnapshot(c.params.space, c.params.id));
   });
   route("POST", "/spaces/:space/notes/:id/promote", (c) => {
@@ -230,7 +230,7 @@ export function createHttpServer(hub: SpaceHub, auth: Auth, opts: HttpOptions = 
     if (c.principal.kind === "agent") return err(c.res, 403, "agents cannot promote drafts");
     if (!hub.hasNote(c.params.space, c.params.id)) return err(c.res, 404, "not found");
     const cur = hub.getNoteSnapshot(c.params.space, c.params.id);
-    hub.patchNote(c.params.space, c.params.id, { tags: cur.tags.filter((t) => t !== DRAFT) });
+    hub.patchNote(c.params.space, c.params.id, { tags: cur.tags.filter((t) => t !== DRAFT) }, c.principal.id);
     json(c.res, 200, hub.getNoteSnapshot(c.params.space, c.params.id));
   });
   route("DELETE", "/spaces/:space/notes/:id", (c) => {
@@ -238,7 +238,7 @@ export function createHttpServer(hub: SpaceHub, auth: Auth, opts: HttpOptions = 
     if (!hub.hasNote(c.params.space, c.params.id)) return err(c.res, 404, "not found");
     const cur = hub.getNoteSnapshot(c.params.space, c.params.id);
     if (!inScope(c, cur.tags, cur.props.path as string)) return;
-    hub.deleteNote(c.params.space, c.params.id);
+    hub.deleteNote(c.params.space, c.params.id, c.principal.id);
     json(c.res, 200, { ok: true });
   });
   // hard purge (05 §5): destructive, admin-only, audited — expunge all traces
@@ -247,6 +247,17 @@ export function createHttpServer(hub: SpaceHub, auth: Auth, opts: HttpOptions = 
     console.error(`[audit] purge ${c.params.space}/${c.params.id} by ${c.principal.id} at ${new Date().toISOString()}`);
     hub.purgeNote(c.params.space, c.params.id);
     json(c.res, 200, { ok: true, purged: c.params.id });
+  });
+
+  // reversibility (05 §4): admin undoes a principal's edits since a time
+  route("POST", "/spaces/:space/revert", (c) => {
+    if (!require(c, "admin")) return;
+    const { principalId, since } = c.body ?? {};
+    if (!principalId) return err(c.res, 400, "principalId required");
+    const sinceTs = typeof since === "number" ? since : since ? Date.parse(since) : 0;
+    if (Number.isNaN(sinceTs)) return err(c.res, 400, "since must be epoch ms or an ISO timestamp");
+    console.error(`[audit] revert ${c.params.space} actor=${principalId} since=${new Date(sinceTs).toISOString()} by ${c.principal.id}`);
+    json(c.res, 200, { reverted: hub.revertActor(c.params.space, principalId, sinceTs) });
   });
 
   // --- links & traversal --- (a link mutates `from`, so scope-check `from`)
@@ -260,7 +271,7 @@ export function createHttpServer(hub: SpaceHub, auth: Auth, opts: HttpOptions = 
     const { from, to, type } = c.body ?? {};
     if (!from || !to) return err(c.res, 400, "from + to required");
     if (!linkScoped(c, from)) return;
-    hub.linkNote(c.params.space, from, to, type ?? null);
+    hub.linkNote(c.params.space, from, to, type ?? null, c.principal.id);
     json(c.res, 201, { ok: true });
   });
   route("POST", "/spaces/:space/unlink", (c) => {
@@ -268,7 +279,7 @@ export function createHttpServer(hub: SpaceHub, auth: Auth, opts: HttpOptions = 
     const { from, to, type } = c.body ?? {};
     if (!from || !to) return err(c.res, 400, "from + to required");
     if (!linkScoped(c, from)) return;
-    hub.unlinkNote(c.params.space, from, to, type ?? null);
+    hub.unlinkNote(c.params.space, from, to, type ?? null, c.principal.id);
     json(c.res, 200, { ok: true });
   });
   route("GET", "/spaces/:space/notes/:id/neighbors", (c) => {
