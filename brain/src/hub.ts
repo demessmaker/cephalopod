@@ -20,6 +20,7 @@ import type { Store } from "./store/store.js";
 import { HashingEmbedder, type Embedder } from "./embedder.js";
 import { scanSecrets } from "./secrets.js";
 import type { Capabilities } from "./auth.js";
+import { RateLimiter } from "./ratelimit.js";
 
 type ServerConn = Conn<ServerMsg, ClientMsg>;
 
@@ -66,19 +67,25 @@ interface DocState {
 export interface HubOptions {
   snapshotEvery?: number; // take a snapshot after N updates to a doc
   embedder?: Embedder; // pluggable embeddings (default: HashingEmbedder)
+  maxLoadedDocs?: number; // cap on in-memory docs (LRU-evict + snapshot beyond it); 0 = unlimited
+  rateLimit?: { capacity: number; refillPerSec: number }; // per-principal WS message rate limit
 }
 
 export type SearchMode = "text" | "semantic" | "hybrid";
 
 export class SpaceHub {
-  private docs = new Map<string, DocState>();
+  private docs = new Map<string, DocState>(); // insertion order == LRU order
   private conns = new Set<ConnState>();
   private snapshotEvery: number;
   private embedder: Embedder;
+  private maxLoadedDocs: number;
+  private limiter?: RateLimiter;
 
   constructor(private store: Store, opts: HubOptions = {}) {
     this.snapshotEvery = opts.snapshotEvery ?? 50;
     this.embedder = opts.embedder ?? new HashingEmbedder();
+    this.maxLoadedDocs = opts.maxLoadedDocs ?? 0;
+    if (opts.rateLimit) this.limiter = new RateLimiter(opts.rateLimit.capacity, opts.rateLimit.refillPerSec);
   }
 
   addConnection(ch: ServerConn, auth: ConnAuth = ALLOW_ALL): ConnState {
@@ -94,19 +101,39 @@ export class SpaceHub {
   // Load a doc into memory from snapshot + log tail (rehydration), or create it.
   private getDoc(space: string, note: string): DocState {
     const key = docKey(space, note);
-    let st = this.docs.get(key);
-    if (st) return st;
+    const existing = this.docs.get(key);
+    if (existing) {
+      this.docs.delete(key); // LRU touch: re-insert moves it to the most-recent end
+      this.docs.set(key, existing);
+      return existing;
+    }
     const doc = new Y.Doc();
     const { snapshot, updates } = this.store.loadDoc(space, note);
     if (snapshot) Y.applyUpdate(doc, snapshot.state, "load");
     for (const u of updates) Y.applyUpdate(doc, u, "load");
-    st = { doc, lastSeq: 0, sinceSnap: 0 };
+    const st = { doc, lastSeq: 0, sinceSnap: 0 };
     this.docs.set(key, st);
     // Refresh the derived index from loaded state, but don't index a note that
     // has never been written (e.g. a bare `open`/`sync1` on a non-existent id) —
     // that would seed a phantom empty node and inflate quota counts.
     if (snapshot || updates.length) this.reindex(space, note, doc);
+    this.evictColdDocs(key);
     return st;
+  }
+
+  // Bound resident memory: when over the cap, evict the least-recently-used docs
+  // (snapshotting any with un-snapshotted writes first, so nothing is lost — they
+  // rehydrate from snapshot+log on next access). Never evicts the just-loaded doc.
+  private evictColdDocs(keep: string): void {
+    if (this.maxLoadedDocs <= 0) return;
+    while (this.docs.size > this.maxLoadedDocs) {
+      const oldest = this.docs.keys().next().value as string | undefined;
+      if (oldest === undefined || oldest === keep) break;
+      const st = this.docs.get(oldest)!;
+      const [s, n] = oldest.split(" ");
+      if (st.lastSeq > 0 && st.sinceSnap > 0) this.snapshot(s, n, st);
+      this.docs.delete(oldest);
+    }
   }
 
   private deny(conn: ConnState, action: string, space: string): void {
@@ -114,6 +141,11 @@ export class SpaceHub {
   }
 
   private handle(conn: ConnState, msg: ClientMsg): void {
+    // Per-principal WS message rate limit (each update triggers a reindex, so the
+    // write path is relatively expensive — don't let one principal flood it).
+    if (this.limiter && conn.auth.principalId && !this.limiter.allow(conn.auth.principalId)) {
+      return conn.ch.send({ t: "error", code: "rate_limited", message: "rate limit exceeded" });
+    }
     // ACL: every read requires canRead(space); every write requires canWrite.
     switch (msg.t) {
       case "subscribe": {

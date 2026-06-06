@@ -79,8 +79,21 @@ export function createHttpServer(hub: SpaceHub, auth: Auth, opts: HttpOptions = 
   };
   const parseCaps = (v: any): Capabilities => (v && typeof v === "object" ? v : {});
 
+  // Minting principals/tokens must not let a capability-restricted token escalate
+  // itself (read-only/scoped -> full) — caps may only ever narrow (05 §2.2). Only
+  // an unconstrained token may mint; a scoped one is refused.
+  const canMint = (c: Ctx): boolean => {
+    const cp = c.caps;
+    if (cp.mode === "read" || cp.writeTags?.length || cp.pathPrefix) {
+      err(c.res, 403, "capability-scoped tokens cannot mint principals or tokens");
+      return false;
+    }
+    return true;
+  };
+
   // --- principals, tokens & spaces ---
   route("POST", "/principals", (c) => {
+    if (!canMint(c)) return;
     const kind = c.body?.kind === "agent" ? "agent" : "user";
     const p = auth.createPrincipal(kind, String(c.body?.name ?? kind));
     const caps = parseCaps(c.body?.capabilities);
@@ -89,6 +102,7 @@ export function createHttpServer(hub: SpaceHub, auth: Auth, opts: HttpOptions = 
 
   // mint an additional (optionally scoped) token for an existing principal
   route("POST", "/tokens", (c) => {
+    if (!canMint(c)) return;
     const principalId = c.body?.principalId;
     if (!principalId || !auth.getPrincipalById(principalId)) return err(c.res, 400, "valid principalId required");
     const caps = parseCaps(c.body?.capabilities);

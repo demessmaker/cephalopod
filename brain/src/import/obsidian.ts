@@ -1,7 +1,7 @@
 // Obsidian vault importer (spec 08). Two-pass, idempotent, in-process bulk import
 // through the brain's write path. Maps files->notes, [[wikilinks]]->edges,
 // frontmatter->tags/props, ![[embeds]]->embeds edges / attachment refs.
-import { readdirSync, statSync, readFileSync, writeFileSync, mkdirSync, existsSync } from "node:fs";
+import { readdirSync, lstatSync, readFileSync, writeFileSync, mkdirSync, existsSync } from "node:fs";
 import { join, relative, sep, basename, extname } from "node:path";
 import { blake3 } from "@noble/hashes/blake3";
 import { bytesToHex, utf8ToBytes } from "@noble/hashes/utils";
@@ -41,7 +41,8 @@ function walk(dir: string, exclude: string[], out: string[] = []): string[] {
   for (const name of readdirSync(dir)) {
     const full = join(dir, name);
     if (exclude.some((e) => full.includes(e))) continue;
-    const st = statSync(full);
+    const st = lstatSync(full); // lstat, not stat: don't follow symlinks
+    if (st.isSymbolicLink()) continue; // a symlink could point outside the vault — skip it
     if (st.isDirectory()) walk(full, exclude, out);
     else if (name.endsWith(".md")) out.push(full);
   }

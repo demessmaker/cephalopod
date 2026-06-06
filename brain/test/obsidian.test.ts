@@ -3,7 +3,7 @@
 import { describe, it, expect, afterEach } from "vitest";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, rmSync } from "node:fs";
+import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, rmSync, symlinkSync } from "node:fs";
 import { SqliteStore } from "../src/store/sqlite.js";
 import { SpaceHub } from "../src/hub.js";
 import { importVault } from "../src/import/obsidian.js";
@@ -45,6 +45,23 @@ describe("M2.5 — Obsidian importer", () => {
     expect(billing.props.status).toBe("active");
     expect(billing.props.path).toBe("services");
     expect(billing.props.aliases).toContain("Billing Service");
+  });
+
+  it("does not follow symlinks out of the vault", () => {
+    // a file the importer should never reach, living outside the vault
+    const outside = mkdtempSync(join(tmpdir(), "outside-"));
+    dirs.push(outside);
+    writeFileSync(join(outside, "secret.md"), "TOPSECRET exfiltrated content");
+
+    const vault = makeVault({ "Real.md": "i am a legitimate note" });
+    symlinkSync(join(outside, "secret.md"), join(vault, "Leak.md")); // symlinked file
+    symlinkSync(outside, join(vault, "outdir")); // symlinked directory
+
+    const { hub } = fresh();
+    const r = importVault(hub, "sp", vault, { writeBack: false });
+
+    expect(r.notesCreated).toBe(1); // only Real.md, not the symlinked targets
+    expect(hub.search("sp", "TOPSECRET")).toHaveLength(0); // outside content never imported
   });
 
   it("resolves [[wikilinks]] to edges and mints stubs for unresolved", () => {

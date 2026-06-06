@@ -12,10 +12,15 @@ import type { ClientMsg, ServerMsg } from "./core/protocol.js";
 const WS_PORT = Number(process.env.CEPH_PORT ?? 7700);
 const HTTP_PORT = Number(process.env.CEPH_HTTP_PORT ?? 7701);
 const DB = process.env.CEPH_DB ?? "./brain.db";
+const wsRpm = Number(process.env.CEPH_WS_RATE_RPM ?? 1200); // per-principal WS message rate
+const maxDocs = Number(process.env.CEPH_MAX_DOCS ?? 5000); // cap on resident in-memory docs
 
 const store = new SqliteStore(DB);
 const auth = new Auth(store);
-const hub = new SpaceHub(store);
+const hub = new SpaceHub(store, {
+  maxLoadedDocs: maxDocs,
+  rateLimit: { capacity: wsRpm, refillPerSec: wsRpm / 60 },
+});
 
 // First-run bootstrap: mint an admin principal + token.
 const boot = auth.bootstrapAdmin();

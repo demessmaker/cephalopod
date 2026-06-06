@@ -117,4 +117,17 @@ describe("N3 — capability-scoped tokens", () => {
     const full = await mint("full", "user", "editor", {});
     expect((await http("POST", "/spaces/kb/notes", full, { title: "Anything" })).status).toBe(201);
   });
+
+  it("capability-scoped tokens cannot mint principals or tokens (no self-escalation)", async () => {
+    const ro = await mint("ro-minter", "user", "editor", { mode: "read" });
+    expect((await http("POST", "/principals", ro, { kind: "user", name: "x" })).status).toBe(403);
+    expect((await http("POST", "/tokens", ro, { principalId: "u_anything" })).status).toBe(403);
+
+    const scoped = await mint("scoped-minter", "user", "editor", { writeTags: ["decision"] });
+    expect((await http("POST", "/principals", scoped, { kind: "agent", name: "y" })).status).toBe(403);
+
+    // an unconstrained token still may mint
+    const full = await mint("full-minter", "user", "editor", {});
+    expect((await http("POST", "/principals", full, { kind: "user", name: "z" })).status).toBe(201);
+  });
 });
