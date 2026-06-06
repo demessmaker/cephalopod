@@ -1,0 +1,41 @@
+name: CI
+
+on:
+  push:
+    branches: ["**"]
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      # Install deps for every package. mcp/arm/web integration tests import the
+      # brain's source directly, so the brain's deps must be present too.
+      - name: Install dependencies
+        run: |
+          for pkg in brain mcp arm web spike; do
+            echo "::group::install $pkg"
+            (cd "$pkg" && npm install --no-audit --no-fund)
+            echo "::endgroup::"
+          done
+
+      - name: Typecheck (TS packages)
+        run: |
+          for pkg in brain mcp arm; do
+            echo "::group::typecheck $pkg"
+            (cd "$pkg" && npx tsc --noEmit)
+            echo "::endgroup::"
+          done
+
+      - name: Test
+        run: |
+          for pkg in brain mcp arm web spike; do
+            echo "::group::test $pkg"
+            (cd "$pkg" && npm test)
+            echo "::endgroup::"
+          done

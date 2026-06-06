@@ -55,6 +55,7 @@ point an agent at it via the MCP server (`mcp/README.md`). Agents get live
 | [06 — Roadmap](docs/specs/06-roadmap.md) | Phasing, milestones, open questions. |
 | [07 — Phase-0 Spike](docs/specs/07-phase0-spike.md) | The M0 convergence prototype: what it proves and how to build it. |
 | [08 — Obsidian Import](docs/specs/08-obsidian-import.md) | Mapping an Obsidian vault into a space (v1 seeding). |
+| [09 — Next Steps](docs/specs/09-next-steps.md) | Post-Phase-1 plan: hardening + the agent-safety track. |
 
 Open questions and questions for the product owner are tracked in
 [the roadmap](docs/specs/06-roadmap.md#3-open-questions-tracked).
