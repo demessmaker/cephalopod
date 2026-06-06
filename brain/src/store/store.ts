@@ -91,3 +91,22 @@ export interface Store {
 
   close(): void;
 }
+
+// The async mirror of Store — every method returns a Promise. This is what a
+// network-backed store (Postgres) must implement; the synchronous SqliteStore can
+// be lifted into it with `asyncify()`. The live hub still uses the sync Store; the
+// async path is what a multi-tenant relay would adopt (see store/pg.ts).
+export type AsyncStore = {
+  [K in keyof Store]: Store[K] extends (...args: infer A) => infer R ? (...args: A) => Promise<Awaited<R>> : never;
+};
+
+/** Lift a synchronous Store into an AsyncStore (for conformance tests / shims). */
+export function asyncify(s: Store): AsyncStore {
+  const out = {} as Record<string, unknown>;
+  for (const key of Object.getOwnPropertyNames(Object.getPrototypeOf(s))) {
+    if (key === "constructor") continue;
+    const fn = (s as unknown as Record<string, unknown>)[key];
+    if (typeof fn === "function") out[key] = async (...args: unknown[]) => (fn as (...a: unknown[]) => unknown).apply(s, args);
+  }
+  return out as AsyncStore;
+}
