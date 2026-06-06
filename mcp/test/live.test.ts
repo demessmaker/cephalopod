@@ -102,4 +102,16 @@ describe("M4.1 MCP resources + live subscriptions", () => {
     const got = await Promise.race([updated, wait(2000).then(() => "TIMEOUT")]);
     expect(got).toBe(uri);
   });
+
+  it("stops notifying after unsubscribe", async () => {
+    const uri = `cephalopod://eng/note/${noteId}`;
+    await mcp.unsubscribeResource({ uri });
+    await wait(50);
+
+    let fired = false;
+    mcp.setNotificationHandler(ResourceUpdatedNotificationSchema, () => { fired = true; });
+    await client.updateNote(noteId, { body: "v3 after unsubscribe" });
+    await wait(300);
+    expect(fired).toBe(false);
+  });
 });

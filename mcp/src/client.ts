@@ -71,11 +71,14 @@ export class CephalopodClient {
   }
 
   // Accept a note id OR a title (03 §4 ergonomics). Returns the resolved id, or
-  // undefined if a title matches nothing.
-  async resolveRef(ref: string): Promise<string | undefined> {
+  // undefined if nothing matches. With `exact`, only an id or an exact-title match
+  // resolves — mutations pass this so a fuzzy top-hit can't silently target (and
+  // edit) the wrong note. Reads may fall back to the best search hit.
+  async resolveRef(ref: string, exact = false): Promise<string | undefined> {
     if (ref.startsWith("n_")) return ref;
     const { hits } = await this.search(ref, 5);
-    const exact = hits.find((h) => h.title.toLowerCase() === ref.toLowerCase());
-    return (exact ?? hits[0])?.id;
+    const match = hits.find((h) => h.title.toLowerCase() === ref.toLowerCase());
+    if (match) return match.id;
+    return exact ? undefined : hits[0]?.id;
   }
 }

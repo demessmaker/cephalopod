@@ -75,8 +75,8 @@ export function buildServer(client: CephalopodClient, opts: { socket?: BrainSock
       },
     },
     async ({ note, ...patch }) => {
-      const id = await client.resolveRef(note);
-      if (!id) return fail(`no note matches "${note}"`);
+      const id = await client.resolveRef(note, true); // exact: don't edit a fuzzy-matched note
+      if (!id) return fail(`no note with id or exact title "${note}" — pass its id (n_…) or create it first`);
       return ok(await client.updateNote(id, patch));
     },
   );
@@ -88,9 +88,9 @@ export function buildServer(client: CephalopodClient, opts: { socket?: BrainSock
       inputSchema: { from: z.string(), to: z.string(), type: z.string().nullable().optional() },
     },
     async ({ from, to, type }) => {
-      const [f, t] = await Promise.all([client.resolveRef(from), client.resolveRef(to)]);
-      if (!f) return fail(`no source note matches "${from}"`);
-      if (!t) return fail(`no target note matches "${to}" — create it first with create_note`);
+      const [f, t] = await Promise.all([client.resolveRef(from, true), client.resolveRef(to, true)]);
+      if (!f) return fail(`no source note with id or exact title "${from}"`);
+      if (!t) return fail(`no target note with id or exact title "${to}" — create it first with create_note`);
       await client.link(f, t, type ?? null);
       return ok({ from: f, to: t, type: type ?? null });
     },
@@ -103,8 +103,9 @@ export function buildServer(client: CephalopodClient, opts: { socket?: BrainSock
       inputSchema: { from: z.string(), to: z.string(), type: z.string().nullable().optional() },
     },
     async ({ from, to, type }) => {
-      const [f, t] = await Promise.all([client.resolveRef(from), client.resolveRef(to)]);
-      if (!f || !t) return fail("source or target note not found");
+      const [f, t] = await Promise.all([client.resolveRef(from, true), client.resolveRef(to, true)]);
+      if (!f) return fail(`no source note with id or exact title "${from}"`);
+      if (!t) return fail(`no target note with id or exact title "${to}"`);
       await client.unlink(f, t, type ?? null);
       return ok({ ok: true });
     },
@@ -196,6 +197,8 @@ export function buildServer(client: CephalopodClient, opts: { socket?: BrainSock
     });
     server.server.setRequestHandler(UnsubscribeRequestSchema, async (req) => {
       watched.delete(req.params.uri);
+      const { space, note } = parseNoteUri(req.params.uri);
+      socket.unopen(space, note); // stop tracking it (bounds memory; re-opens cleanly on re-subscribe)
       return {};
     });
 

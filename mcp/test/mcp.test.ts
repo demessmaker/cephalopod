@@ -109,6 +109,20 @@ describe("M4 MCP server", () => {
     expect(r.text).toMatch(/no note matches/);
   });
 
+  it("mutating tools require an exact match (won't edit a fuzzy-resolved note)", async () => {
+    // "Billing Service" exists; a partial/fuzzy title must NOT resolve for a mutation
+    const u = await call("update_note", { note: "Billing", tags: ["should-not-apply"] });
+    expect(u.isError).toBe(true);
+    expect(u.text).toMatch(/exact title/);
+    // the real note was left untouched
+    const got = await call("get_note", { note: "Billing Service" });
+    expect(got.data.tags).not.toContain("should-not-apply");
+    // an exact title (or id) still works
+    const ok = await call("update_note", { note: "Billing Service", tags: ["service", "ok"] });
+    expect(ok.isError).toBe(false);
+    expect(ok.data.tags).toContain("ok");
+  });
+
   it("list_spaces shows the agent's membership", async () => {
     const r = await call("list_spaces");
     expect(r.data.some((m: any) => m.space === "eng" && m.role === "editor")).toBe(true);
