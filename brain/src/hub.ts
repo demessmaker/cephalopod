@@ -320,6 +320,18 @@ export class SpaceHub {
     const max = this.store.getMaxNotes(space);
     return max > 0 && this.store.countNotes(space) >= max;
   }
+  getSecretScan(space: string) {
+    return this.store.getSecretScan(space);
+  }
+  setSecretScan(space: string, mode: "off" | "warn" | "block") {
+    this.store.setSecretScan(space, mode);
+  }
+  // Hard purge (05 §5): expunge a note everywhere + evict from memory. Destructive
+  // and audited; arms that cached it get nothing on re-fetch.
+  purgeNote(space: string, note: string): void {
+    this.store.purgeNote(space, note);
+    this.docs.delete(docKey(space, note));
+  }
   // Which required facets a note (with these tags) is missing. Exempt if tagged
   // `shared`, or if the note IS a facet node (tagged with a facet key itself).
   missingFacets(space: string, tags: string[]): string[] {

@@ -51,13 +51,16 @@ with the role — they only narrow it. Implemented:
 - **Verified** (`brain/test/limits.test.ts`): bucket refill math; HTTP 429 after
   burst; quota blocks the over-limit create and lifts when raised.
 
-### N5 — Secret-scanning + hard-purge  ‹med› (`05 §5`)
-- On write, scan title/body for secret patterns (API keys/tokens); warn or block
-  per space policy; flag `secret_suspected`.
-- Admin **hard-purge**: rewrite log + snapshots to expunge a note/secret and
-  force-resync arms (the one destructive, audited op we specced but never built).
-- **Acceptance:** a planted fake key is flagged; purge removes a note from log,
-  snapshots, index, and search.
+### N5 — Secret-scanning + hard-purge ✅ (done) (`05 §5`)
+- Write-time **secret scan** (`src/secrets.ts`, curated high-precision patterns):
+  per-space `secretScan` policy `off|warn|block` (default `warn`). `warn` tags the
+  note `#secret-suspected`; `block` rejects with `422 {code:"secret_suspected", patterns}`.
+- Admin **hard-purge** (`POST /spaces/:s/notes/:id/purge`): expunges the note from
+  the log, snapshots, index, search, and embeddings, evicts it from memory, and
+  writes an audit line. Admin-only; the one destructive op.
+- **Verified** (`brain/test/secrets.test.ts`): scanner precision; warn-tags /
+  block-rejects / off; purge removes a note from reads + search + log (a fresh
+  store wouldn't rehydrate it); non-admin purge denied.
 
 ### N6 — Reversibility  ‹med› (`05 §4`)
 Admin "revert principal X's edits since T" by applying inverse CRDT deltas (soft,

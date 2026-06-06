@@ -77,6 +77,11 @@ export class SqliteStore implements Store {
     } catch {
       /* column already exists */
     }
+    try {
+      this.db.exec("ALTER TABLE space_settings ADD COLUMN secret_scan TEXT");
+    } catch {
+      /* column already exists */
+    }
   }
 
   ensureSpace(space: string): void {
@@ -312,6 +317,26 @@ export class SqliteStore implements Store {
   }
   countNotes(space: string): number {
     return (this.db.prepare("SELECT COUNT(*) AS c FROM nodes WHERE space=? AND stub=0").get(space) as any).c;
+  }
+  getSecretScan(space: string): "off" | "warn" | "block" {
+    const r = this.db.prepare("SELECT secret_scan FROM space_settings WHERE space=?").get(space) as any;
+    return r?.secret_scan === "off" || r?.secret_scan === "block" ? r.secret_scan : "warn"; // default warn
+  }
+  setSecretScan(space: string, mode: "off" | "warn" | "block"): void {
+    this.db
+      .prepare(`INSERT INTO space_settings(space, secret_scan) VALUES (?,?) ON CONFLICT(space) DO UPDATE SET secret_scan=excluded.secret_scan`)
+      .run(space, mode);
+  }
+  purgeNote(space: string, id: string): void {
+    const tx = this.db.transaction(() => {
+      this.db.prepare("DELETE FROM updates WHERE space=? AND note=?").run(space, id);
+      this.db.prepare("DELETE FROM snapshots WHERE space=? AND note=?").run(space, id);
+      this.db.prepare("DELETE FROM nodes WHERE space=? AND id=?").run(space, id);
+      this.db.prepare("DELETE FROM edges WHERE space=? AND (frm=? OR dst=?)").run(space, id, id);
+      this.searchDelete(space, id);
+      this.db.prepare("DELETE FROM embeddings WHERE space=? AND id=?").run(space, id);
+    });
+    tx();
   }
 
   close(): void {

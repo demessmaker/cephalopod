@@ -59,6 +59,11 @@ export interface Store {
   getMaxNotes(space: string): number; // per-space note quota (0 = unlimited)
   setMaxNotes(space: string, max: number): void;
   countNotes(space: string): number; // non-stub notes
+  getSecretScan(space: string): "off" | "warn" | "block";
+  setSecretScan(space: string, mode: "off" | "warn" | "block"): void;
+
+  // --- destructive admin op (05 §5) ---
+  purgeNote(space: string, id: string): void; // expunge from log, snapshots, index, search, embeddings
 
   // --- principals, tokens, roles (05 §1–2) ---
   addPrincipal(p: Principal): void;

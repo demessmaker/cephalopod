@@ -6,6 +6,7 @@ import { Auth, can, type Action, type Capabilities } from "./auth.js";
 import type { SpaceHub } from "./hub.js";
 import type { Principal, Role } from "./store/store.js";
 import { RateLimiter } from "./ratelimit.js";
+import { scanSecrets } from "./secrets.js";
 
 export interface HttpOptions {
   rateLimit?: { capacity: number; refillPerSec: number }; // per-token request rate
@@ -115,6 +116,7 @@ export function createHttpServer(hub: SpaceHub, auth: Auth, opts: HttpOptions = 
     agentMode: hub.getAgentMode(space),
     requiredFacets: hub.getRequiredFacets(space),
     maxNotes: hub.getMaxNotes(space),
+    secretScan: hub.getSecretScan(space),
   });
   route("GET", "/spaces/:space/settings", (c) => {
     if (!require(c, "read")) return;
@@ -136,6 +138,10 @@ export function createHttpServer(hub: SpaceHub, auth: Auth, opts: HttpOptions = 
       if (typeof maxNotes !== "number" || maxNotes < 0) return err(c.res, 400, "maxNotes must be a non-negative number");
       hub.setMaxNotes(c.params.space, maxNotes);
     }
+    if (c.body?.secretScan !== undefined) {
+      if (!["off", "warn", "block"].includes(c.body.secretScan)) return err(c.res, 400, "secretScan must be off|warn|block");
+      hub.setSecretScan(c.params.space, c.body.secretScan);
+    }
     json(c.res, 200, settingsOf(c.params.space));
   });
 
@@ -155,6 +161,21 @@ export function createHttpServer(hub: SpaceHub, auth: Auth, opts: HttpOptions = 
     return false;
   };
   const tagFilters = (c: Ctx) => c.url.searchParams.getAll("tag");
+  const SECRET = "secret-suspected";
+
+  // Scan text for secrets per the space policy. Returns the tags to merge (warn)
+  // or sends a 422 and returns null (block). [] = clean / off.
+  const secretGate = (c: Ctx, text: string, tags: string[]): string[] | null => {
+    const found = scanSecrets(text);
+    if (!found.length) return tags;
+    const policy = hub.getSecretScan(c.params.space);
+    if (policy === "off") return tags;
+    if (policy === "block") {
+      json(c.res, 422, { error: "possible secret detected", code: "secret_suspected", patterns: found });
+      return null;
+    }
+    return [...new Set([...tags, SECRET])]; // warn: tag it, let it through (hidden if also #draft)
+  };
 
   // --- notes ---
   route("POST", "/spaces/:space/notes", (c) => {
@@ -162,6 +183,9 @@ export function createHttpServer(hub: SpaceHub, auth: Auth, opts: HttpOptions = 
     const fields = { ...(c.body ?? {}) };
     fields.props = { ...(fields.props ?? {}), authoredBy: stamp(c.principal.kind) };
     if (gated(c)) fields.tags = [...new Set([...(fields.tags ?? []), DRAFT])];
+    const scanned = secretGate(c, `${fields.title ?? ""}\n${fields.body ?? ""}`, fields.tags ?? []);
+    if (scanned === null) return; // blocked
+    fields.tags = scanned;
     if (!inScope(c, fields.tags ?? [], fields.props?.path)) return;
     if (facetError(c, fields.tags ?? [])) return;
     if (!hub.hasNote(c.params.space, c.body?.id ?? "") && hub.quotaExceeded(c.params.space)) {
@@ -186,6 +210,11 @@ export function createHttpServer(hub: SpaceHub, auth: Auth, opts: HttpOptions = 
     if (!hub.hasNote(c.params.space, c.params.id)) return err(c.res, 404, "not found");
     const patch = { ...(c.body ?? {}) };
     const cur0 = hub.getNoteSnapshot(c.params.space, c.params.id);
+    if (patch.title !== undefined || patch.body !== undefined) {
+      const scanned = secretGate(c, `${patch.title ?? ""}\n${patch.body ?? ""}`, patch.tags ?? cur0.tags);
+      if (scanned === null) return; // blocked
+      if (scanned.includes(SECRET)) patch.tags = scanned;
+    }
     if (!inScope(c, patch.tags ?? cur0.tags, (patch.props?.path ?? cur0.props.path) as string)) return;
     if (gated(c)) {
       if (!cur0.tags.includes(DRAFT)) return err(c.res, 403, "agents may only edit #draft notes");
@@ -211,6 +240,13 @@ export function createHttpServer(hub: SpaceHub, auth: Auth, opts: HttpOptions = 
     if (!inScope(c, cur.tags, cur.props.path as string)) return;
     hub.deleteNote(c.params.space, c.params.id);
     json(c.res, 200, { ok: true });
+  });
+  // hard purge (05 §5): destructive, admin-only, audited — expunge all traces
+  route("POST", "/spaces/:space/notes/:id/purge", (c) => {
+    if (!require(c, "admin")) return;
+    console.error(`[audit] purge ${c.params.space}/${c.params.id} by ${c.principal.id} at ${new Date().toISOString()}`);
+    hub.purgeNote(c.params.space, c.params.id);
+    json(c.res, 200, { ok: true, purged: c.params.id });
   });
 
   // --- links & traversal --- (a link mutates `from`, so scope-check `from`)

@@ -30,6 +30,10 @@ HTTP API, full-text search, and token-based per-space access control.
 - ✅ **Rate limits & quotas** (`05 §4–5`) — per-token request rate limit
   (`429 rate_limited`, `CEPH_RATE_RPM`) and per-space note quota
   (`maxNotes` setting → `429 quota_exceeded`).
+- ✅ **Secret-scanning + hard-purge** (`05 §5`) — write-time secret detection
+  (`secretScan: off|warn|block`; warn → `#secret-suspected`, block → 422) and an
+  admin `POST /notes/:id/purge` that expunges all traces (log/snapshots/index/
+  search/embeddings) + audit log.
 - ✅ **Obsidian vault importer** (`08`) — two-pass, idempotent, in-process bulk
   import: files→notes, `[[wikilinks]]`→edges (id-rewrite + stubs), frontmatter→
   tags/props, `![[embeds]]`→embeds edges, `cephalopod_id` write-back.
