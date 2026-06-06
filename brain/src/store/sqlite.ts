@@ -61,9 +61,14 @@ export class SqliteStore implements Store {
       CREATE TABLE IF NOT EXISTS space_settings(space TEXT PRIMARY KEY, agent_mode TEXT, required_facets TEXT);
       CREATE TABLE IF NOT EXISTS embeddings(space TEXT, id TEXT, vec BLOB, PRIMARY KEY(space, id));
     `);
-    // migrate older DBs that predate required_facets
+    // migrate older DBs
     try {
       this.db.exec("ALTER TABLE space_settings ADD COLUMN required_facets TEXT");
+    } catch {
+      /* column already exists */
+    }
+    try {
+      this.db.exec("ALTER TABLE tokens ADD COLUMN capabilities TEXT");
     } catch {
       /* column already exists */
     }
@@ -232,12 +237,16 @@ export class SqliteStore implements Store {
     const r = this.db.prepare("SELECT id, kind, name FROM principals WHERE id=?").get(id) as any;
     return r ? { id: r.id, kind: r.kind, name: r.name } : undefined;
   }
-  addToken(hash: string, principalId: string): void {
-    this.db.prepare("INSERT OR REPLACE INTO tokens(hash, principal_id) VALUES (?,?)").run(hash, principalId);
+  addToken(hash: string, principalId: string, capabilities: string): void {
+    this.db.prepare("INSERT OR REPLACE INTO tokens(hash, principal_id, capabilities) VALUES (?,?,?)").run(hash, principalId, capabilities);
   }
   principalIdByToken(hash: string): string | undefined {
     const r = this.db.prepare("SELECT principal_id FROM tokens WHERE hash=?").get(hash) as any;
     return r?.principal_id;
+  }
+  getCapabilities(hash: string): string | undefined {
+    const r = this.db.prepare("SELECT capabilities FROM tokens WHERE hash=?").get(hash) as any;
+    return r?.capabilities ?? undefined;
   }
   principalCount(): number {
     return (this.db.prepare("SELECT COUNT(*) AS c FROM principals").get() as any).c;

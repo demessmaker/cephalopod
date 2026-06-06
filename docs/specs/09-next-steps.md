@@ -27,15 +27,19 @@ spaces (an agent can't publish via WS), and quarantines facet-less notes with
 `brain/test/ws-policy.test.ts` (agent forced to draft + hidden; human stays live;
 facet-less agent note quarantined).
 
-### N3 — Capability-scoped tokens  ‹med› (`05 §2.2`)
-Today: per-space role (viewer/editor/admin). Add capability constraints that
-*intersect* with the role:
-- `mode: read-only`, tag scope (`read:#runbook`, `write:#decision`), path scope
-  (`billing/**`), note allow/deny lists.
-- Store on the token; enforce in HTTP + WS + MCP. Issue via `POST /principals`
-  / a token-mint endpoint with a `capabilities` field.
-- **Acceptance:** a read-only agent token is refused all writes; a tag-scoped
-  token can only write notes carrying its allowed tag.
+### N3 — Capability-scoped tokens ✅ (done) (`05 §2.2`)
+Capabilities live on the **token** (a principal can hold several) and *intersect*
+with the role — they only narrow it. Implemented:
+- `mode:"read"` (read-only — no writes on HTTP **or** WS), `writeTags` (may only
+  write notes carrying an allowed tag), `pathPrefix` (may only write within a
+  `props.path` prefix).
+- Stored as token JSON; enforced in HTTP (`require` + per-note `inScope`) and on
+  WS (read-only via `canWrite`). MCP needs no change — an agent's token is
+  enforced at the brain however it connects.
+- Mint via `POST /principals {capabilities}` or `POST /tokens {principalId, capabilities}`.
+- **Verified** (`brain/test/capabilities.test.ts`): read-only refused writes on
+  HTTP and WS; tag-scoped token writes only its tag (and can't repurpose others);
+  path-scoped token confined to its prefix; empty caps = full per role.
 
 ### N4 — Rate limits & quotas  ‹small–med› (`05 §4–5`)
 Per-token request rate limit + per-space write quota; typed `rate_limited` error.

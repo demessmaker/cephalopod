@@ -2,7 +2,7 @@
 // funnel through the same hub path as WS deltas, so HTTP and live editors
 // converge. Every route is ACL-checked (05 §2).
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
-import { Auth, can, type Action } from "./auth.js";
+import { Auth, can, type Action, type Capabilities } from "./auth.js";
 import type { SpaceHub } from "./hub.js";
 import type { Principal, Role } from "./store/store.js";
 
@@ -13,6 +13,7 @@ interface Ctx {
   params: Record<string, string>;
   body: any;
   principal: Principal;
+  caps: Capabilities;
 }
 type Handler = (c: Ctx) => void;
 interface Route {
@@ -41,21 +42,49 @@ export function createHttpServer(hub: SpaceHub, auth: Auth) {
   const routes: Route[] = [];
   const route = (m: string, p: string, h: Handler) => routes.push(compile(m, "/v1" + p, h));
 
-  // require a space role >= action; sends 403 and returns false if not allowed
+  // require a space role >= action; also enforces a read-only token capability
   const require = (c: Ctx, action: Action): boolean => {
     const role = auth.roleOf(c.params.space, c.principal.id);
     if (!can(role, action)) {
       err(c.res, 403, `forbidden: need ${action} on ${c.params.space}`);
       return false;
     }
+    if ((action === "write" || action === "admin") && c.caps.mode === "read") {
+      err(c.res, 403, "token is read-only");
+      return false;
+    }
     return true;
   };
 
-  // --- principals & spaces ---
+  // a write to a note with these tags/path is within the token's capability scope
+  const inScope = (c: Ctx, tags: string[] = [], path = ""): boolean => {
+    const cp = c.caps;
+    if (cp.writeTags?.length && !cp.writeTags.some((t) => tags.includes(t))) {
+      err(c.res, 403, `token may only write notes tagged: ${cp.writeTags.join(", ")}`);
+      return false;
+    }
+    if (cp.pathPrefix && !String(path).startsWith(cp.pathPrefix)) {
+      err(c.res, 403, `token scoped to path "${cp.pathPrefix}"`);
+      return false;
+    }
+    return true;
+  };
+  const parseCaps = (v: any): Capabilities => (v && typeof v === "object" ? v : {});
+
+  // --- principals, tokens & spaces ---
   route("POST", "/principals", (c) => {
     const kind = c.body?.kind === "agent" ? "agent" : "user";
     const p = auth.createPrincipal(kind, String(c.body?.name ?? kind));
-    json(c.res, 201, { principal: p, token: auth.issueToken(p.id) });
+    const caps = parseCaps(c.body?.capabilities);
+    json(c.res, 201, { principal: p, token: auth.issueToken(p.id, caps), capabilities: caps });
+  });
+
+  // mint an additional (optionally scoped) token for an existing principal
+  route("POST", "/tokens", (c) => {
+    const principalId = c.body?.principalId;
+    if (!principalId || !auth.getPrincipalById(principalId)) return err(c.res, 400, "valid principalId required");
+    const caps = parseCaps(c.body?.capabilities);
+    json(c.res, 201, { token: auth.issueToken(principalId, caps), capabilities: caps });
   });
 
   route("GET", "/spaces", (c) => json(c.res, 200, { spaces: auth.memberships(c.principal.id) }));
@@ -118,6 +147,7 @@ export function createHttpServer(hub: SpaceHub, auth: Auth) {
     const fields = { ...(c.body ?? {}) };
     fields.props = { ...(fields.props ?? {}), authoredBy: stamp(c.principal.kind) };
     if (gated(c)) fields.tags = [...new Set([...(fields.tags ?? []), DRAFT])];
+    if (!inScope(c, fields.tags ?? [], fields.props?.path)) return;
     if (facetError(c, fields.tags ?? [])) return;
     const id = hub.createNote(c.params.space, fields, c.body?.id);
     json(c.res, 201, { id, draft: gated(c) });
@@ -136,9 +166,10 @@ export function createHttpServer(hub: SpaceHub, auth: Auth) {
     if (!require(c, "write")) return;
     if (!hub.hasNote(c.params.space, c.params.id)) return err(c.res, 404, "not found");
     const patch = { ...(c.body ?? {}) };
+    const cur0 = hub.getNoteSnapshot(c.params.space, c.params.id);
+    if (!inScope(c, patch.tags ?? cur0.tags, (patch.props?.path ?? cur0.props.path) as string)) return;
     if (gated(c)) {
-      const cur = hub.getNoteSnapshot(c.params.space, c.params.id);
-      if (!cur.tags.includes(DRAFT)) return err(c.res, 403, "agents may only edit #draft notes");
+      if (!cur0.tags.includes(DRAFT)) return err(c.res, 403, "agents may only edit #draft notes");
       if (patch.tags && !patch.tags.includes(DRAFT)) patch.tags = [...patch.tags, DRAFT]; // can't self-promote
       patch.props = { ...(patch.props ?? {}), authoredBy: "agent" };
     }
@@ -157,15 +188,23 @@ export function createHttpServer(hub: SpaceHub, auth: Auth) {
   route("DELETE", "/spaces/:space/notes/:id", (c) => {
     if (!require(c, "write")) return;
     if (!hub.hasNote(c.params.space, c.params.id)) return err(c.res, 404, "not found");
+    const cur = hub.getNoteSnapshot(c.params.space, c.params.id);
+    if (!inScope(c, cur.tags, cur.props.path as string)) return;
     hub.deleteNote(c.params.space, c.params.id);
     json(c.res, 200, { ok: true });
   });
 
-  // --- links & traversal ---
+  // --- links & traversal --- (a link mutates `from`, so scope-check `from`)
+  const linkScoped = (c: Ctx, from: string): boolean => {
+    if (!hub.hasNote(c.params.space, from)) return true; // new stub source — allow
+    const cur = hub.getNoteSnapshot(c.params.space, from);
+    return inScope(c, cur.tags, cur.props.path as string);
+  };
   route("POST", "/spaces/:space/links", (c) => {
     if (!require(c, "write")) return;
     const { from, to, type } = c.body ?? {};
     if (!from || !to) return err(c.res, 400, "from + to required");
+    if (!linkScoped(c, from)) return;
     hub.linkNote(c.params.space, from, to, type ?? null);
     json(c.res, 201, { ok: true });
   });
@@ -173,6 +212,7 @@ export function createHttpServer(hub: SpaceHub, auth: Auth) {
     if (!require(c, "write")) return;
     const { from, to, type } = c.body ?? {};
     if (!from || !to) return err(c.res, 400, "from + to required");
+    if (!linkScoped(c, from)) return;
     hub.unlinkNote(c.params.space, from, to, type ?? null);
     json(c.res, 200, { ok: true });
   });
@@ -215,8 +255,10 @@ export function createHttpServer(hub: SpaceHub, auth: Auth) {
 
   const server = createServer((req, res) => {
     const url = new URL(req.url ?? "/", "http://localhost");
-    const principal = auth.authenticate(req.headers.authorization?.replace(/^Bearer\s+/i, ""));
+    const token = req.headers.authorization?.replace(/^Bearer\s+/i, "");
+    const principal = auth.authenticate(token);
     if (!principal) return err(res, 401, "unauthorized");
+    const caps = auth.capabilities(token);
 
     let raw = "";
     req.on("data", (d) => (raw += d));
@@ -236,7 +278,7 @@ export function createHttpServer(hub: SpaceHub, auth: Auth) {
         const params: Record<string, string> = {};
         r.keys.forEach((k, i) => (params[k] = decodeURIComponent(m[i + 1])));
         try {
-          return r.handler({ req, res, url, params, body, principal });
+          return r.handler({ req, res, url, params, body, principal, caps });
         } catch (e) {
           return err(res, 500, (e as Error).message);
         }

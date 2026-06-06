@@ -60,8 +60,9 @@ export interface Store {
   // --- principals, tokens, roles (05 §1–2) ---
   addPrincipal(p: Principal): void;
   getPrincipal(id: string): Principal | undefined;
-  addToken(hash: string, principalId: string): void;
+  addToken(hash: string, principalId: string, capabilities: string): void;
   principalIdByToken(hash: string): string | undefined;
+  getCapabilities(hash: string): string | undefined; // raw JSON, or undefined
   principalCount(): number;
   setRole(space: string, principalId: string, role: Role): void;
   getRole(space: string, principalId: string): Role | undefined;

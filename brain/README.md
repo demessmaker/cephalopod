@@ -24,6 +24,9 @@ HTTP API, full-text search, and token-based per-space access control.
   `GET /search?mode=text|semantic|hybrid`.
 - ✅ **Auth & RBAC** (`05 §1–2`) — principals (users + agents), hashed tokens,
   per-space roles (viewer/editor/admin), enforced on **both HTTP and WS**.
+- ✅ **Capability-scoped tokens** (`05 §2.2`) — a token can be `mode:"read"`
+  (read-only), `writeTags`-scoped, or `pathPrefix`-scoped; capabilities intersect
+  with the role (only narrow). Mint via `POST /principals` / `POST /tokens`.
 - ✅ **Obsidian vault importer** (`08`) — two-pass, idempotent, in-process bulk
   import: files→notes, `[[wikilinks]]`→edges (id-rewrite + stubs), frontmatter→
   tags/props, `![[embeds]]`→embeds edges, `cephalopod_id` write-back.

@@ -31,8 +31,13 @@ const wss = new WebSocketServer({ port: WS_PORT });
 wss.on("connection", (sock, req) => {
   const token = new URL(req.url ?? "/", "http://localhost").searchParams.get("token") ?? undefined;
   const p = auth.authenticate(token);
+  const caps = auth.capabilities(token);
   const connAuth: ConnAuth = p
-    ? { canRead: (s) => can(auth.roleOf(s, p.id), "read"), canWrite: (s) => can(auth.roleOf(s, p.id), "write"), kind: p.kind }
+    ? {
+        canRead: (s) => can(auth.roleOf(s, p.id), "read"),
+        canWrite: (s) => can(auth.roleOf(s, p.id), "write") && caps.mode !== "read", // read-only tokens can't write over WS
+        kind: p.kind,
+      }
     : { canRead: () => false, canWrite: () => false };
   const conn = hub.addConnection(wsConn<ServerMsg, ClientMsg>(sock), connAuth);
   sock.on("close", () => hub.removeConnection(conn));

@@ -14,6 +14,14 @@ export function can(role: Role | undefined, need: Action): boolean {
   return RANK[role] >= (need === "read" ? 1 : need === "write" ? 2 : 3);
 }
 
+// Per-token capability constraints (05 §2.2). They INTERSECT with the role —
+// they only ever narrow it, never widen. Empty = full access for the role.
+export interface Capabilities {
+  mode?: "read" | "write"; // "read" = read-only token (no writes anywhere)
+  writeTags?: string[]; // may only write notes carrying at least one of these tags
+  pathPrefix?: string; // may only write notes whose props.path starts with this
+}
+
 const hashToken = (token: string) => bytesToHex(blake3(utf8ToBytes(token)));
 const newId = (prefix: string) => prefix + randomBytes(12).toString("hex");
 
@@ -27,9 +35,9 @@ export class Auth {
   }
 
   // Returns the plaintext token ONCE; only its hash is persisted.
-  issueToken(principalId: string): string {
+  issueToken(principalId: string, capabilities: Capabilities = {}): string {
     const token = "cph_" + randomBytes(24).toString("hex");
-    this.store.addToken(hashToken(token), principalId);
+    this.store.addToken(hashToken(token), principalId, JSON.stringify(capabilities));
     return token;
   }
 
@@ -39,6 +47,20 @@ export class Auth {
     return pid ? this.store.getPrincipal(pid) : undefined;
   }
 
+  // The capability constraints attached to a token (empty = full for its role).
+  capabilities(token: string | undefined): Capabilities {
+    if (!token) return {};
+    const raw = this.store.getCapabilities(hashToken(token));
+    try {
+      return raw ? (JSON.parse(raw) as Capabilities) : {};
+    } catch {
+      return {};
+    }
+  }
+
+  getPrincipalById(id: string): Principal | undefined {
+    return this.store.getPrincipal(id);
+  }
   roleOf(space: string, principalId: string): Role | undefined {
     return this.store.getRole(space, principalId);
   }
