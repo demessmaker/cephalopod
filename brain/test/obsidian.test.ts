@@ -47,6 +47,21 @@ describe("M2.5 — Obsidian importer", () => {
     expect(billing.props.aliases).toContain("Billing Service");
   });
 
+  it("parses frontmatter without tripping on body horizontal rules", () => {
+    const vault = makeVault({
+      // a `---` horizontal rule in the body must not be read as the closing fence
+      "Note.md": `---\ntags: [doc]\nstatus: active\n---\nIntro paragraph.\n\n---\n\nSection after a rule.`,
+    });
+    const { hub } = fresh();
+    const r = importVault(hub, "sp", vault, { writeBack: false });
+    expect(r.notesCreated).toBe(1);
+    const snap = hub.getNoteSnapshot("sp", hub.search("sp", "Intro")[0].id);
+    expect(snap.tags).toContain("doc");
+    expect(snap.props.status).toBe("active");
+    expect(snap.body).toContain("Section after a rule."); // hr + following text kept in body
+    expect(snap.body).not.toContain("status: active"); // frontmatter not leaked into body
+  });
+
   it("does not follow symlinks out of the vault", () => {
     // a file the importer should never reach, living outside the vault
     const outside = mkdtempSync(join(tmpdir(), "outside-"));

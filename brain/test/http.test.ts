@@ -1,6 +1,7 @@
 // M2 acceptance: HTTP API, auth/ACL, and full-text search over real HTTP.
 import { describe, it, expect, beforeAll, afterAll } from "vitest";
 import type { Server } from "node:http";
+import { request as rawRequest } from "node:http";
 import { SqliteStore } from "../src/store/sqlite.js";
 import { SpaceHub } from "../src/hub.js";
 import { Auth } from "../src/auth.js";
@@ -89,6 +90,27 @@ describe("M2 brain — HTTP API + auth + search", () => {
     // a non-member sees 403 even for reads
     const outsider = (await api("POST", "/principals", adminToken, { kind: "agent", name: "stranger" })).body.token;
     expect((await api("GET", "/spaces/eng/tags", outsider)).status).toBe(403);
+  });
+
+  it("clamps bad limit/hops query params instead of erroring", async () => {
+    // NaN, negative, and absurd values must not 500 or run unbounded
+    expect((await api("GET", "/spaces/eng/search?q=charging&limit=notanumber", adminToken)).status).toBe(200);
+    expect((await api("GET", "/spaces/eng/search?q=charging&limit=-5", adminToken)).status).toBe(200);
+    expect((await api("GET", "/spaces/eng/notes?limit=-1", adminToken)).status).toBe(200);
+    const a = (await api("POST", "/spaces/eng/notes", adminToken, { title: "Hubz" })).body.id;
+    expect((await api("GET", `/spaces/eng/notes/${a}/neighbors?hops=99999`, adminToken)).status).toBe(200);
+  });
+
+  it("returns 400 (not an uncaught 500) for malformed percent-encoding in the path", async () => {
+    const status = await new Promise<number>((resolve) => {
+      const port = (server.address() as any).port;
+      const r = rawRequest(
+        { port, path: "/v1/spaces/%zz/tags", method: "GET", headers: { authorization: `Bearer ${adminToken}` } },
+        (res) => { res.resume(); res.on("end", () => resolve(res.statusCode ?? 0)); },
+      );
+      r.end();
+    });
+    expect(status).toBe(400);
   });
 
   it("404s for missing notes and reflects deletes", async () => {

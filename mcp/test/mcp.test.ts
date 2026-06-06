@@ -123,6 +123,11 @@ describe("M4 MCP server", () => {
     expect(ok.data.tags).toContain("ok");
   });
 
+  it("rejects empty required string inputs", async () => {
+    const r = await call("create_note", { title: "" });
+    expect(r.isError).toBe(true);
+  });
+
   it("list_spaces shows the agent's membership", async () => {
     const r = await call("list_spaces");
     expect(r.data.some((m: any) => m.space === "eng" && m.role === "editor")).toBe(true);

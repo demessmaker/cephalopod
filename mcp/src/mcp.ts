@@ -26,7 +26,7 @@ export function buildServer(client: CephalopodClient, opts: { socket?: BrainSock
       description:
         "Search the team knowledge graph. mode: text (keyword), semantic (vector), or hybrid (both, recommended for fuzzy recall). Filter by facet tags (e.g. [\"client:acme\",\"project:billing\"]). Returns ranked notes.",
       inputSchema: {
-        query: z.string(),
+        query: z.string().min(1),
         limit: z.number().int().positive().optional(),
         mode: z.enum(["text", "semantic", "hybrid"]).optional(),
         tags: z.array(z.string()).optional(),
@@ -39,7 +39,7 @@ export function buildServer(client: CephalopodClient, opts: { socket?: BrainSock
     "get_note",
     {
       description: "Read a note's full content + metadata + outgoing links. Accepts a note id or a title.",
-      inputSchema: { note: z.string().describe("note id (n_…) or title") },
+      inputSchema: { note: z.string().min(1).describe("note id (n_…) or title") },
     },
     async ({ note }) => {
       const id = await client.resolveRef(note);
@@ -53,7 +53,7 @@ export function buildServer(client: CephalopodClient, opts: { socket?: BrainSock
     {
       description: "Create a new note. Body may contain [[wikilinks]] which become graph edges.",
       inputSchema: {
-        title: z.string(),
+        title: z.string().min(1),
         body: z.string().optional(),
         tags: z.array(z.string()).optional(),
         props: z.record(z.unknown()).optional(),
@@ -67,7 +67,7 @@ export function buildServer(client: CephalopodClient, opts: { socket?: BrainSock
     {
       description: "Update a note's title/body/tags/props. Accepts a note id or title.",
       inputSchema: {
-        note: z.string(),
+        note: z.string().min(1),
         title: z.string().optional(),
         body: z.string().optional(),
         tags: z.array(z.string()).optional(),
@@ -85,7 +85,7 @@ export function buildServer(client: CephalopodClient, opts: { socket?: BrainSock
     "link_notes",
     {
       description: "Create a directed edge between two notes, optionally typed (e.g. depends_on). Accepts ids or titles.",
-      inputSchema: { from: z.string(), to: z.string(), type: z.string().nullable().optional() },
+      inputSchema: { from: z.string().min(1), to: z.string().min(1), type: z.string().nullable().optional() },
     },
     async ({ from, to, type }) => {
       const [f, t] = await Promise.all([client.resolveRef(from, true), client.resolveRef(to, true)]);
@@ -100,7 +100,7 @@ export function buildServer(client: CephalopodClient, opts: { socket?: BrainSock
     "unlink_notes",
     {
       description: "Remove a directed edge between two notes. Accepts ids or titles.",
-      inputSchema: { from: z.string(), to: z.string(), type: z.string().nullable().optional() },
+      inputSchema: { from: z.string().min(1), to: z.string().min(1), type: z.string().nullable().optional() },
     },
     async ({ from, to, type }) => {
       const [f, t] = await Promise.all([client.resolveRef(from, true), client.resolveRef(to, true)]);
@@ -116,7 +116,7 @@ export function buildServer(client: CephalopodClient, opts: { socket?: BrainSock
     {
       description: "Traverse the graph: return the N-hop neighborhood (nodes + edges) around a note.",
       inputSchema: {
-        note: z.string(),
+        note: z.string().min(1),
         hops: z.number().int().positive().optional(),
         dir: z.enum(["out", "in", "both"]).optional(),
       },

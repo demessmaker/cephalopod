@@ -25,11 +25,15 @@ function parseScalarOrInlineList(v: string): unknown {
 
 export function parseFrontmatter(content: string): Frontmatter {
   if (!content.startsWith("---")) return { data: {}, body: content, raw: "" };
-  const end = content.indexOf("\n---", 3);
-  if (end === -1) return { data: {}, body: content, raw: "" };
-  const raw = content.slice(0, end + 4);
-  const block = content.slice(content.indexOf("\n") + 1, end);
-  const body = content.slice(end + 4).replace(/^\r?\n/, "");
+  // the closing fence must be a full line of exactly `---` (optional trailing
+  // spaces), so a body horizontal-rule or a `---more` line isn't mistaken for it.
+  const close = content.slice(3).match(/\n---[ \t]*(\r?\n|$)/);
+  if (!close || close.index === undefined) return { data: {}, body: content, raw: "" };
+  const fenceAt = 3 + close.index; // the "\n" just before the closing ---
+  const afterFence = fenceAt + close[0].length; // close fence consumed its own newline
+  const raw = content.slice(0, afterFence);
+  const block = content.slice(content.indexOf("\n") + 1, fenceAt);
+  const body = content.slice(afterFence);
 
   const data: Record<string, unknown> = {};
   const lines = block.split(/\r?\n/);

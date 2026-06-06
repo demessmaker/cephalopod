@@ -31,5 +31,6 @@ export function handle(id: string, doc: Y.Doc): NoteHandle {
 }
 
 export function getTitle(h: NoteHandle): string {
-  return (h.meta.get("title") as string) ?? "";
+  const t = h.meta.get("title"); // LWW field — guard against a non-string ever landing here
+  return typeof t === "string" ? t : "";
 }

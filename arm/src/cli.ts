@@ -31,6 +31,13 @@ async function tryConnect(r: Replica): Promise<boolean> {
   }
 }
 
+function need(args: string[], n: number, usage: string): void {
+  if (args.length < n || args.slice(0, n).some((a) => a === undefined || a === "")) {
+    console.error(`usage: ${usage}`);
+    process.exit(1);
+  }
+}
+
 async function main() {
   const [cmd, ...args] = process.argv.slice(2);
   const r = cfg();
@@ -45,12 +52,14 @@ async function main() {
       break;
     }
     case "cat": {
+      need(args, 1, "cat <id>");
       const n = r.getNote(args[0]);
       if (!n) return console.error("not cached:", args[0]);
       console.log(`# ${n.title}\n\n${n.body}`);
       break;
     }
     case "new": {
+      need(args, 1, "new <title> [body]");
       const online = await tryConnect(r);
       const id = r.newNote({ title: args[0], body: args[1] });
       if (online) await r.waitIdle();
@@ -60,6 +69,8 @@ async function main() {
     case "title":
     case "append":
     case "link": {
+      if (cmd === "link") need(args, 2, "link <id> <to> [type]");
+      else need(args, 2, `${cmd} <id> <text>`);
       const online = await tryConnect(r);
       if (cmd === "title") r.setTitle(args[0], args[1]);
       else if (cmd === "append") r.appendBody(args[0], args[1]);
@@ -69,19 +80,21 @@ async function main() {
       break;
     }
     case "pull": {
-      await r.connect();
+      need(args, 1, "pull <id> [hops]");
+      if (!(await tryConnect(r))) break; // offline: nothing to pull
       const ids = await r.pullScope(args[0], Number(args[1] ?? 1));
       await r.waitIdle();
       console.log(`cached ${ids.length} notes`);
       break;
     }
     case "search": {
-      await r.connect();
+      need(args, 1, "search <query>");
+      if (!(await tryConnect(r))) break;
       for (const h of await r.search(args.join(" "))) console.log(`${h.id}  ${h.title}`);
       break;
     }
     case "sync": {
-      await r.connect();
+      if (!(await tryConnect(r))) break;
       await r.waitIdle();
       console.log("synced", JSON.stringify(r.status()));
       break;
@@ -97,4 +110,7 @@ async function main() {
   process.exit(0);
 }
 
-main();
+main().catch((e) => {
+  console.error(e instanceof Error ? e.message : e);
+  process.exit(1);
+});

@@ -225,7 +225,7 @@ export class SpaceHub {
     if (caps?.pathPrefix && !String(snap.props.path ?? "").startsWith(caps.pathPrefix)) {
       return { code: "scope_denied", message: `token scoped to path "${caps.pathPrefix}"` };
     }
-    if (this.getSecretScan(space) === "block" && scanSecrets(`${snap.title}\n${snap.body}`).length > 0) {
+    if (this.getSecretScan(space) === "block" && scanSecrets(`${snap.title}\n${snap.body}\n${JSON.stringify(snap.props)}`).length > 0) {
       return { code: "secret_suspected", message: "possible secret detected — write rejected" };
     }
     return null;
@@ -270,7 +270,7 @@ export class SpaceHub {
     const needSecretTag =
       this.getSecretScan(space) === "warn" &&
       !tags.includes("secret-suspected") &&
-      scanSecrets(`${getTitle(h)}\n${h.body.toString()}`).length > 0;
+      scanSecrets(`${getTitle(h)}\n${h.body.toString()}\n${JSON.stringify(h.props.toJSON())}`).length > 0;
     const needStamp = isAgent && h.props.get("authoredBy") !== "agent";
     const needDraft = isAgent && this.getAgentMode(space) === "draft" && !tags.includes("draft");
     const needFacets = isAgent && this.missingFacets(space, tags).length > 0 && !tags.includes("needs-facets");

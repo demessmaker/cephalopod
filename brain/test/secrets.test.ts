@@ -59,6 +59,19 @@ describe("N5 — secret scanning policy", () => {
     expect(r.body.patterns).toContain("aws-access-key");
   });
 
+  it("block: also scans props, not just title/body", async () => {
+    await api("PUT", "/spaces/sec/settings", adminToken, { secretScan: "block" });
+    // a secret hidden in props must be caught on create…
+    const create = await api("POST", "/spaces/sec/notes", adminToken, { title: "Clean", body: "nothing here", props: { note: `cred ${AWS}` } });
+    expect(create.status).toBe(422);
+    // …and on a props-only patch
+    await api("PUT", "/spaces/sec/settings", adminToken, { secretScan: "off" });
+    const id = (await api("POST", "/spaces/sec/notes", adminToken, { title: "P", body: "x" })).body.id;
+    await api("PUT", "/spaces/sec/settings", adminToken, { secretScan: "block" });
+    const patch = await api("PATCH", `/spaces/sec/notes/${id}`, adminToken, { props: { token: `key ${AWS}` } });
+    expect(patch.status).toBe(422);
+  });
+
   it("off: no scanning", async () => {
     await api("PUT", "/spaces/sec/settings", adminToken, { secretScan: "off" });
     const r = await api("POST", "/spaces/sec/notes", adminToken, { title: "Raw", body: `key ${AWS}` });

@@ -44,6 +44,13 @@ const json = (res: ServerResponse, code: number, body: unknown) => {
   res.end(s);
 };
 const err = (res: ServerResponse, code: number, msg: string) => json(res, code, { error: msg });
+// Parse a query int with a default; clamp to [min,max] and reject NaN/negatives/huge.
+// An absent (null) or empty param uses the default — note Number(null)/Number("") is 0.
+const intParam = (v: string | null, def: number, min: number, max: number): number => {
+  if (v === null || v === "") return def;
+  const n = Number(v);
+  return Number.isFinite(n) ? Math.min(max, Math.max(min, Math.trunc(n))) : def;
+};
 
 export function createHttpServer(hub: SpaceHub, auth: Auth, opts: HttpOptions = {}) {
   const routes: Route[] = [];
@@ -198,7 +205,7 @@ export function createHttpServer(hub: SpaceHub, auth: Auth, opts: HttpOptions = 
     const fields = { ...(c.body ?? {}) };
     fields.props = { ...(fields.props ?? {}), authoredBy: stamp(c.principal.kind) };
     if (gated(c)) fields.tags = [...new Set([...(fields.tags ?? []), DRAFT])];
-    const scanned = secretGate(c, `${fields.title ?? ""}\n${fields.body ?? ""}`, fields.tags ?? []);
+    const scanned = secretGate(c, `${fields.title ?? ""}\n${fields.body ?? ""}\n${JSON.stringify(fields.props ?? {})}`, fields.tags ?? []);
     if (scanned === null) return; // blocked
     fields.tags = scanned;
     if (!inScope(c, fields.tags ?? [], fields.props?.path)) return;
@@ -213,7 +220,7 @@ export function createHttpServer(hub: SpaceHub, auth: Auth, opts: HttpOptions = 
   route("GET", "/spaces/:space/notes", (c) => {
     if (!require(c, "read")) return;
     const drafts = c.url.searchParams.get("drafts") === "1";
-    json(c.res, 200, { notes: hub.listNotes(c.params.space, Number(c.url.searchParams.get("limit") ?? 50), drafts, tagFilters(c)) });
+    json(c.res, 200, { notes: hub.listNotes(c.params.space, intParam(c.url.searchParams.get("limit"), 50, 1, 500), drafts, tagFilters(c)) });
   });
   route("GET", "/spaces/:space/notes/:id", (c) => {
     if (!require(c, "read")) return;
@@ -225,8 +232,8 @@ export function createHttpServer(hub: SpaceHub, auth: Auth, opts: HttpOptions = 
     if (!hub.hasNote(c.params.space, c.params.id)) return err(c.res, 404, "not found");
     const patch = { ...(c.body ?? {}) };
     const cur0 = hub.getNoteSnapshot(c.params.space, c.params.id);
-    if (patch.title !== undefined || patch.body !== undefined) {
-      const scanned = secretGate(c, `${patch.title ?? ""}\n${patch.body ?? ""}`, patch.tags ?? cur0.tags);
+    if (patch.title !== undefined || patch.body !== undefined || patch.props !== undefined) {
+      const scanned = secretGate(c, `${patch.title ?? ""}\n${patch.body ?? ""}\n${patch.props ? JSON.stringify(patch.props) : ""}`, patch.tags ?? cur0.tags);
       if (scanned === null) return; // blocked
       if (scanned.includes(SECRET)) patch.tags = scanned;
     }
@@ -304,7 +311,7 @@ export function createHttpServer(hub: SpaceHub, auth: Auth, opts: HttpOptions = 
   });
   route("GET", "/spaces/:space/notes/:id/neighbors", (c) => {
     if (!require(c, "read")) return;
-    const hops = Number(c.url.searchParams.get("hops") ?? 1);
+    const hops = intParam(c.url.searchParams.get("hops"), 1, 0, 6);
     const dir = (c.url.searchParams.get("dir") ?? "both") as "out" | "in" | "both";
     json(c.res, 200, hub.neighbors(c.params.space, c.params.id, hops, dir));
   });
@@ -317,7 +324,7 @@ export function createHttpServer(hub: SpaceHub, auth: Auth, opts: HttpOptions = 
   route("GET", "/spaces/:space/search", (c) => {
     if (!require(c, "read")) return;
     const q = c.url.searchParams.get("q") ?? "";
-    const limit = Number(c.url.searchParams.get("limit") ?? 20);
+    const limit = intParam(c.url.searchParams.get("limit"), 20, 1, 200);
     const drafts = c.url.searchParams.get("drafts") === "1";
     const mode = (c.url.searchParams.get("mode") ?? "text") as "text" | "semantic" | "hybrid";
     json(c.res, 200, { hits: q ? hub.searchMode(c.params.space, q, mode, limit, drafts, tagFilters(c)) : [] });
@@ -386,7 +393,11 @@ export function createHttpServer(hub: SpaceHub, auth: Auth, opts: HttpOptions = 
         const m = url.pathname.match(r.re);
         if (!m) continue;
         const params: Record<string, string> = {};
-        r.keys.forEach((k, i) => (params[k] = decodeURIComponent(m[i + 1])));
+        try {
+          r.keys.forEach((k, i) => (params[k] = decodeURIComponent(m[i + 1])));
+        } catch {
+          return err(res, 400, "malformed percent-encoding in path");
+        }
         try {
           return r.handler({ req, res, url, params, body, principal, caps });
         } catch (e) {
