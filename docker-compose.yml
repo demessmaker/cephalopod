@@ -9,7 +9,11 @@
 # (see mcp/README.md), pointed at this brain with an agent token.
 services:
   brain:
-    build: ./brain
+    # context is the repo root so the sibling core/ package is in the build (the
+    # brain re-exports @cephalopod/core from ../../../core/src/*)
+    build:
+      context: .
+      dockerfile: brain/Dockerfile
     container_name: cephalopod-brain
     # bound to loopback by default for a self-host build; drop the 127.0.0.1
     # prefix (or front it with a TLS-terminating reverse proxy) to expose remotely
