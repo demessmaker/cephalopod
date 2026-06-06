@@ -72,6 +72,11 @@ export class SqliteStore implements Store {
     } catch {
       /* column already exists */
     }
+    try {
+      this.db.exec("ALTER TABLE space_settings ADD COLUMN max_notes INTEGER");
+    } catch {
+      /* column already exists */
+    }
   }
 
   ensureSpace(space: string): void {
@@ -292,6 +297,21 @@ export class SqliteStore implements Store {
          ON CONFLICT(space) DO UPDATE SET required_facets=excluded.required_facets`,
       )
       .run(space, JSON.stringify(facets));
+  }
+  getMaxNotes(space: string): number {
+    const r = this.db.prepare("SELECT max_notes FROM space_settings WHERE space=?").get(space) as any;
+    return r?.max_notes ?? 0;
+  }
+  setMaxNotes(space: string, max: number): void {
+    this.db
+      .prepare(
+        `INSERT INTO space_settings(space, max_notes) VALUES (?,?)
+         ON CONFLICT(space) DO UPDATE SET max_notes=excluded.max_notes`,
+      )
+      .run(space, max);
+  }
+  countNotes(space: string): number {
+    return (this.db.prepare("SELECT COUNT(*) AS c FROM nodes WHERE space=? AND stub=0").get(space) as any).c;
   }
 
   close(): void {

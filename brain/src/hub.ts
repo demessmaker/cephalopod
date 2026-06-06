@@ -309,6 +309,17 @@ export class SpaceHub {
   setRequiredFacets(space: string, facets: string[]) {
     this.store.setRequiredFacets(space, facets);
   }
+  getMaxNotes(space: string) {
+    return this.store.getMaxNotes(space);
+  }
+  setMaxNotes(space: string, max: number) {
+    this.store.setMaxNotes(space, max);
+  }
+  // true if a new note would exceed the space's quota (0 = unlimited)
+  quotaExceeded(space: string): boolean {
+    const max = this.store.getMaxNotes(space);
+    return max > 0 && this.store.countNotes(space) >= max;
+  }
   // Which required facets a note (with these tags) is missing. Exempt if tagged
   // `shared`, or if the note IS a facet node (tagged with a facet key itself).
   missingFacets(space: string, tags: string[]): string[] {

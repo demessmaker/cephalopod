@@ -56,6 +56,9 @@ export interface Store {
   setAgentMode(space: string, mode: "draft" | "open"): void;
   getRequiredFacets(space: string): string[]; // required tag-key facets (e.g. client, project)
   setRequiredFacets(space: string, facets: string[]): void;
+  getMaxNotes(space: string): number; // per-space note quota (0 = unlimited)
+  setMaxNotes(space: string, max: number): void;
+  countNotes(space: string): number; // non-stub notes
 
   // --- principals, tokens, roles (05 §1–2) ---
   addPrincipal(p: Principal): void;

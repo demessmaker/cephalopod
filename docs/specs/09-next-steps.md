@@ -41,9 +41,15 @@ with the role — they only narrow it. Implemented:
   HTTP and WS; tag-scoped token writes only its tag (and can't repurpose others);
   path-scoped token confined to its prefix; empty caps = full per role.
 
-### N4 — Rate limits & quotas  ‹small–med› (`05 §4–5`)
-Per-token request rate limit + per-space write quota; typed `rate_limited` error.
-Bounds runaway agents. **Acceptance:** an agent exceeding its rate gets 429s; humans unaffected.
+### N4 — Rate limits & quotas ✅ (done) (`05 §4–5`)
+- Per-token **rate limit** (in-memory token bucket, `src/ratelimit.ts`): HTTP
+  returns `429 {code:"rate_limited"}` + `Retry-After` when a token's bucket is
+  empty. Configurable via `CEPH_RATE_RPM` (default 600/min); off in tests unless
+  opted in. (Distributed/Redis limiter is a scale item.)
+- Per-space **note quota** (`maxNotes` in space settings, 0 = unlimited): creates
+  beyond it return `429 {code:"quota_exceeded"}`.
+- **Verified** (`brain/test/limits.test.ts`): bucket refill math; HTTP 429 after
+  burst; quota blocks the over-limit create and lifts when raised.
 
 ### N5 — Secret-scanning + hard-purge  ‹med› (`05 §5`)
 - On write, scan title/body for secret patterns (API keys/tokens); warn or block

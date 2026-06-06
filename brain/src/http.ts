@@ -5,6 +5,11 @@ import { createServer, type IncomingMessage, type ServerResponse } from "node:ht
 import { Auth, can, type Action, type Capabilities } from "./auth.js";
 import type { SpaceHub } from "./hub.js";
 import type { Principal, Role } from "./store/store.js";
+import { RateLimiter } from "./ratelimit.js";
+
+export interface HttpOptions {
+  rateLimit?: { capacity: number; refillPerSec: number }; // per-token request rate
+}
 
 interface Ctx {
   req: IncomingMessage;
@@ -38,9 +43,10 @@ const json = (res: ServerResponse, code: number, body: unknown) => {
 };
 const err = (res: ServerResponse, code: number, msg: string) => json(res, code, { error: msg });
 
-export function createHttpServer(hub: SpaceHub, auth: Auth) {
+export function createHttpServer(hub: SpaceHub, auth: Auth, opts: HttpOptions = {}) {
   const routes: Route[] = [];
   const route = (m: string, p: string, h: Handler) => routes.push(compile(m, "/v1" + p, h));
+  const limiter = opts.rateLimit ? new RateLimiter(opts.rateLimit.capacity, opts.rateLimit.refillPerSec) : undefined;
 
   // require a space role >= action; also enforces a read-only token capability
   const require = (c: Ctx, action: Action): boolean => {
@@ -105,13 +111,18 @@ export function createHttpServer(hub: SpaceHub, auth: Auth) {
   });
 
   // per-space settings: agent write policy (05 §4) + required facets
+  const settingsOf = (space: string) => ({
+    agentMode: hub.getAgentMode(space),
+    requiredFacets: hub.getRequiredFacets(space),
+    maxNotes: hub.getMaxNotes(space),
+  });
   route("GET", "/spaces/:space/settings", (c) => {
     if (!require(c, "read")) return;
-    json(c.res, 200, { agentMode: hub.getAgentMode(c.params.space), requiredFacets: hub.getRequiredFacets(c.params.space) });
+    json(c.res, 200, settingsOf(c.params.space));
   });
   route("PUT", "/spaces/:space/settings", (c) => {
     if (!require(c, "admin")) return;
-    const { agentMode, requiredFacets } = c.body ?? {};
+    const { agentMode, requiredFacets, maxNotes } = c.body ?? {};
     if (agentMode !== undefined) {
       if (agentMode !== "draft" && agentMode !== "open") return err(c.res, 400, "agentMode must be draft|open");
       hub.setAgentMode(c.params.space, agentMode);
@@ -121,7 +132,11 @@ export function createHttpServer(hub: SpaceHub, auth: Auth) {
         return err(c.res, 400, "requiredFacets must be a string[]");
       hub.setRequiredFacets(c.params.space, requiredFacets);
     }
-    json(c.res, 200, { agentMode: hub.getAgentMode(c.params.space), requiredFacets: hub.getRequiredFacets(c.params.space) });
+    if (maxNotes !== undefined) {
+      if (typeof maxNotes !== "number" || maxNotes < 0) return err(c.res, 400, "maxNotes must be a non-negative number");
+      hub.setMaxNotes(c.params.space, maxNotes);
+    }
+    json(c.res, 200, settingsOf(c.params.space));
   });
 
   // Draft-gate (05 §4): agent writes are provenance-stamped and, when the space
@@ -149,6 +164,10 @@ export function createHttpServer(hub: SpaceHub, auth: Auth) {
     if (gated(c)) fields.tags = [...new Set([...(fields.tags ?? []), DRAFT])];
     if (!inScope(c, fields.tags ?? [], fields.props?.path)) return;
     if (facetError(c, fields.tags ?? [])) return;
+    if (!hub.hasNote(c.params.space, c.body?.id ?? "") && hub.quotaExceeded(c.params.space)) {
+      c.res.writeHead(429, { "content-type": "application/json" });
+      return c.res.end(JSON.stringify({ error: "space note quota reached", code: "quota_exceeded" }));
+    }
     const id = hub.createNote(c.params.space, fields, c.body?.id);
     json(c.res, 201, { id, draft: gated(c) });
   });
@@ -258,6 +277,10 @@ export function createHttpServer(hub: SpaceHub, auth: Auth) {
     const token = req.headers.authorization?.replace(/^Bearer\s+/i, "");
     const principal = auth.authenticate(token);
     if (!principal) return err(res, 401, "unauthorized");
+    if (limiter && !limiter.allow(token!)) {
+      res.writeHead(429, { "content-type": "application/json", "retry-after": "1" });
+      return res.end(JSON.stringify({ error: "rate limited", code: "rate_limited" }));
+    }
     const caps = auth.capabilities(token);
 
     let raw = "";
