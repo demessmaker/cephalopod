@@ -1,0 +1,10 @@
+# The packaged .vsix ships only the bundled extension. Source, tests, deps, and
+# config stay out (esbuild inlines src/ + the @cephalopod/core sources into
+# out/extension.cjs).
+src/**
+test/**
+node_modules/**
+tsconfig.json
+vitest.config.*
+.gitignore
+**/*.map
