@@ -1,0 +1,17 @@
+# Dependencies — each package installs its own; none are committed.
+node_modules/
+**/node_modules/
+
+# Local databases (CRDT log, snapshots, index, auth, blobs) + WAL sidecars
+*.db
+*.db-wal
+*.db-shm
+
+# Tooling caches & logs
+.vite/
+**/.vite/
+*.log
+
+# Env / secrets
+.env
+**/.env*

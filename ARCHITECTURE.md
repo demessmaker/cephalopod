@@ -232,7 +232,15 @@ the unprivileged `node` user.
 - **`/healthz`** — liveness (brain + web), wired into Docker/k8s healthchecks.
 - **`/metrics`** — Prometheus text (request totals by status class, uptime, RSS).
 - **Structured request logging** — one JSON line per request (method, path, status,
-  ms); on by default, silence with `CEPH_LOG=0`.
+  ms — no query string, headers, token, or body); on by default, silence with
+  `CEPH_LOG=0`.
+
+> **Exposure note:** `/healthz` and `/metrics` are unauthenticated and sit *before*
+> the rate limiter (standard for orchestration/Prometheus; the metrics are
+> non-sensitive aggregate counters with no per-space/principal data). Keep the API
+> port internal — the bundled compose binds it to loopback. In a multi-tenant /
+> Postgres deployment, bind `/metrics` to an internal interface or gate it at the
+> reverse proxy, since it shares the API port.
 
 ### Backup / restore
 
