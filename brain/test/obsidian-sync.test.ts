@@ -10,7 +10,7 @@ import { SpaceHub } from "../src/hub.js";
 import { importVault } from "../src/import/obsidian.js";
 import { exportVault } from "../src/import/export.js";
 import { syncVault } from "../src/import/sync.js";
-import { serializeNote } from "../src/import/markdown.js";
+import { serializeNote, safeDir, safeFileName, insideVault, notePath } from "../src/import/markdown.js";
 
 const dirs: string[] = [];
 function makeVault(files: Record<string, string> = {}): string {
@@ -50,6 +50,35 @@ describe("note -> markdown serialization", () => {
     expect(md).not.toContain("authoredBy:"); // internal provenance
     expect(md).toContain("[[Gateway|the gateway]]"); // id -> title, alias kept
     expect(md).toContain("and [[Gateway]]."); // redundant alias dropped
+  });
+});
+
+describe("path safety (containment)", () => {
+  it("sanitizes traversal/absolute paths and titles to stay inside the vault", () => {
+    expect(safeDir("../../etc")).toBe("etc");
+    expect(safeDir("/etc/cron.d")).toBe("etc/cron.d");
+    expect(safeDir("a/../../b")).toBe("a/b");
+    expect(safeDir("..")).toBe("");
+    expect(safeFileName("../../evil")).not.toContain("/");
+    expect(safeFileName("..")).toBe("untitled.md");
+    expect(safeFileName("a/b\\c")).toBe("a-b-c.md");
+  });
+  it("insideVault rejects escapes", () => {
+    expect(insideVault("/vault", "/vault/a/b.md")).toBe(true);
+    expect(insideVault("/vault", "/vault")).toBe(true);
+    expect(insideVault("/vault", "/vault/../etc/x")).toBe(false);
+    expect(insideVault("/vault", "/etc/x")).toBe(false);
+  });
+
+  it("a malicious props.path is contained, never written outside the vault", async () => {
+    const hub = fresh();
+    await hub.createNote("sp", { title: "keys", body: "pwn", props: { path: "../../../etc/cron.d" } });
+    const vault = makeVault();
+    const r = await exportVault(hub, "sp", vault);
+    expect(r.filesWritten).toBe(1);
+    expect(notePath(await hub.getNoteSnapshot("sp", (await hub.search("sp", "pwn"))[0].id))).toBe("etc/cron.d/keys.md");
+    expect(existsSync(join(vault, "etc", "cron.d", "keys.md"))).toBe(true); // inside, sanitized
+    expect(existsSync("/etc/cron.d/keys.md")).toBe(false); // never escaped
   });
 });
 
@@ -131,7 +160,14 @@ describe("bidirectional sync", () => {
     expect(r.conflicts).toContain(id);
     expect((await hub.getNoteSnapshot("sp", id)).tags).toContain("sync-conflict");
     expect(read(vault, "Note.md")).toContain("brain edit"); // brain won the file
-    expect(read(vault, "Note.conflict.md")).toContain("vault edit"); // vault copy preserved
+    // vault copy preserved OUTSIDE the synced tree (so it isn't re-imported)
+    expect(read(vault, ".cephalopod/conflicts/Note.md")).toContain("vault edit");
+
+    // a follow-up sync must NOT spawn a duplicate note from the sidecar
+    const before = (await hub.listNotes("sp", 1000, true)).length;
+    const r2 = await syncVault(hub, "sp", vault);
+    expect(r2.imported).toBe(0);
+    expect((await hub.listNotes("sp", 1000, true)).length).toBe(before);
   });
 
   it("creates in both directions: new vault file -> brain, new brain note -> vault", async () => {

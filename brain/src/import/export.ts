@@ -2,12 +2,12 @@
 // note in a space to a Markdown file (frontmatter + body) at <props.path>/<title>.md,
 // and records a sync manifest (id -> { rel, vaultHash, brainHash }) so a later
 // bidirectional sync can tell which side changed.
-import { writeFileSync, mkdirSync, existsSync, readFileSync, rmSync } from "node:fs";
+import { writeFileSync, mkdirSync, existsSync, readFileSync, rmSync, renameSync } from "node:fs";
 import { join, dirname } from "node:path";
 import { blake3 } from "@noble/hashes/blake3";
 import { bytesToHex, utf8ToBytes } from "@noble/hashes/utils";
 import type { SpaceHub, NoteSnapshot } from "../hub.js";
-import { serializeNote, notePath, type SerializeOptions } from "./markdown.js";
+import { serializeNote, notePath, insideVault, type SerializeOptions } from "./markdown.js";
 
 export const hashOf = (s: string) => bytesToHex(blake3(utf8ToBytes(s)));
 
@@ -28,13 +28,31 @@ export interface ExportReport {
 }
 
 export const syncManifestPath = (vaultPath: string) => join(vaultPath, ".cephalopod", "sync-manifest.json");
+// A corrupt/truncated manifest (e.g. from an interrupted run) must not brick every
+// future sync — treat it as empty (a full re-export/reconcile is safe) rather than
+// throwing. Entries with a non-contained `rel` are dropped (defense-in-depth).
 export const loadSyncManifest = (vaultPath: string): SyncManifest => {
   const p = syncManifestPath(vaultPath);
-  return existsSync(p) ? JSON.parse(readFileSync(p, "utf8")) : {};
+  if (!existsSync(p)) return {};
+  let raw: SyncManifest;
+  try {
+    raw = JSON.parse(readFileSync(p, "utf8"));
+  } catch {
+    return {};
+  }
+  const out: SyncManifest = {};
+  for (const [id, e] of Object.entries(raw)) {
+    if (e && typeof e.rel === "string" && insideVault(vaultPath, join(vaultPath, e.rel))) out[id] = e;
+  }
+  return out;
 };
+// Atomic write (temp + rename) so an interrupted run never leaves a partial file.
 export const saveSyncManifest = (vaultPath: string, m: SyncManifest): void => {
   mkdirSync(join(vaultPath, ".cephalopod"), { recursive: true });
-  writeFileSync(syncManifestPath(vaultPath), JSON.stringify(m, null, 2));
+  const p = syncManifestPath(vaultPath);
+  const tmp = `${p}.${process.pid}.tmp`;
+  writeFileSync(tmp, JSON.stringify(m, null, 2));
+  renameSync(tmp, p);
 };
 
 // Load every (non-stub) note in a space as a snapshot, plus an id->title map for
@@ -74,6 +92,10 @@ export async function exportVault(hub: SpaceHub, space: string, vaultPath: strin
     const md = serializeNote(snap, idToTitle, opts);
     const brainHash = hashOf(md);
     const full = join(vaultPath, rel);
+    if (!insideVault(vaultPath, full)) {
+      report.warnings.push(`refused to write "${snap.title}" outside the vault (path: ${String(snap.props.path)})`);
+      continue;
+    }
     const prev = manifest[snap.id];
     const unchanged = prev?.brainHash === brainHash && prev?.rel === rel && existsSync(full);
     if (unchanged) {
@@ -83,8 +105,9 @@ export async function exportVault(hub: SpaceHub, space: string, vaultPath: strin
     }
     if (!opts.dryRun) {
       mkdirSync(dirname(full), { recursive: true });
-      // a note that moved folders/titles leaves a stale file — remove it
-      if (prev && prev.rel !== rel && existsSync(join(vaultPath, prev.rel))) rmSync(join(vaultPath, prev.rel));
+      // a note that moved folders/titles leaves a stale file — remove it (contained)
+      const stale = prev && prev.rel !== rel ? join(vaultPath, prev.rel) : undefined;
+      if (stale && insideVault(vaultPath, stale) && existsSync(stale)) rmSync(stale);
       writeFileSync(full, md);
     }
     report.filesWritten++;

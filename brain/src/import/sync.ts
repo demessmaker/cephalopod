@@ -8,7 +8,7 @@ import { readdirSync, lstatSync, readFileSync, writeFileSync, existsSync, mkdirS
 import { join, relative, sep, dirname, basename } from "node:path";
 import type { SpaceHub, NoteSnapshot, NoteFields } from "../hub.js";
 import { parseFrontmatter, withCephalopodId } from "./frontmatter.js";
-import { serializeNote, asTags, notePath, type SerializeOptions } from "./markdown.js";
+import { serializeNote, asTags, notePath, insideVault, type SerializeOptions } from "./markdown.js";
 import { hashOf, loadSyncManifest, saveSyncManifest, snapshotSpace, type SyncManifest } from "./export.js";
 
 export interface SyncOptions extends SerializeOptions {
@@ -57,7 +57,7 @@ export async function syncVault(hub: SpaceHub, space: string, vaultPath: string,
   const t0 = performance.now();
   const conflictPolicy = opts.conflict ?? "brain";
   const writeBack = opts.writeBack ?? true;
-  const exclude = [".obsidian", ".cephalopod", ...(opts.exclude ?? [])];
+  const exclude = [".obsidian", ".cephalopod", ".conflict.md", ...(opts.exclude ?? [])];
   const report: SyncReport = { imported: 0, exported: 0, conflicts: [], unchanged: 0, durationMs: 0, warnings: [] };
   await hub.ensureSpaceExists(space);
 
@@ -102,11 +102,16 @@ export async function syncVault(hub: SpaceHub, space: string, vaultPath: string,
           report.imported++;
           next[id] = await remanifest(hub, space, id, v.rel, v.content, idToTitle, opts);
         } else {
-          // brain wins: preserve the vault's divergent copy, overwrite the file
+          // brain wins: preserve the vault's divergent copy, overwrite the file.
+          // The sidecar goes under .cephalopod/conflicts/ (excluded from walk) so it
+          // isn't re-imported as a duplicate note on the next sync.
           if (!opts.dryRun) {
-            const sidecar = v.full.replace(/\.md$/, ".conflict.md");
-            writeFileSync(sidecar, v.content);
-            writeFileSync(v.full, brainMd!);
+            const sidecar = join(vaultPath, ".cephalopod", "conflicts", v.rel);
+            if (insideVault(vaultPath, sidecar)) {
+              mkdirSync(dirname(sidecar), { recursive: true });
+              writeFileSync(sidecar, v.content);
+            }
+            if (insideVault(vaultPath, v.full)) writeFileSync(v.full, brainMd!);
             await tagConflict(hub, space, b);
           }
           report.exported++;
@@ -137,7 +142,7 @@ export async function syncVault(hub: SpaceHub, space: string, vaultPath: string,
         const fields = fileToFields(v);
         if (await hub.hasNote(space, id)) await hub.patchNote(space, id, fields);
         else await hub.createNote(space, fields, id);
-        if (writeBack && isNew) writeFileSync(v.full, finalContent);
+        if (writeBack && isNew && insideVault(vaultPath, v.full)) writeFileSync(v.full, finalContent);
       }
       report.imported++;
       next[id] = await remanifest(hub, space, id, v.rel, finalContent, idToTitle, opts);
@@ -160,10 +165,13 @@ export async function syncVault(hub: SpaceHub, space: string, vaultPath: string,
 
 function writeFile(vaultPath: string, rel: string, md: string, prevRel: string | undefined, vaultRel: string | undefined): void {
   const full = join(vaultPath, rel);
+  if (!insideVault(vaultPath, full)) return; // contained: never write outside the vault
   mkdirSync(dirname(full), { recursive: true });
-  // clean up a stale file the note moved away from
+  // clean up a stale file the note moved away from (contained)
   for (const stale of [prevRel, vaultRel]) {
-    if (stale && stale !== rel && existsSync(join(vaultPath, stale))) rmSync(join(vaultPath, stale));
+    if (!stale || stale === rel) continue;
+    const sf = join(vaultPath, stale);
+    if (insideVault(vaultPath, sf) && existsSync(sf)) rmSync(sf);
   }
   writeFileSync(full, md);
 }

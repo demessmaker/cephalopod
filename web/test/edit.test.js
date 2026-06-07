@@ -56,6 +56,19 @@ describe("yutil", () => {
     expect(diffRange("hello", "help")).toEqual({ index: 3, remove: 2, insert: "p" });
     expect(diffRange("abc", "aXbc")).toEqual({ index: 1, remove: 0, insert: "X" });
   });
+  it("diffRange never begins or ends mid surrogate-pair", () => {
+    const apply = (o, n) => {
+      const d = diffRange(o, n);
+      const out = o.slice(0, d.index) + d.insert + o.slice(d.index + d.remove);
+      const lone = /[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/;
+      return { out, splitInput: lone.test(o + "|" + n), splitEdit: lone.test(d.insert) };
+    };
+    for (const [o, n] of [["😀", "😁"], ["a😀b", "a😀Xb"], ["x😀y", "xy"], ["", "😀😁"], ["😀😁", "😀"]]) {
+      const r = apply(o, n);
+      expect(r.out).toBe(n); // applying the diff reproduces newStr
+      expect(r.splitEdit).toBe(false); // the inserted slice is never a lone surrogate
+    }
+  });
   it("b64 round-trips bytes", () => {
     const u = new Uint8Array([0, 1, 250, 99, 255]);
     expect([...b64dec(b64enc(u))]).toEqual([...u]);
@@ -73,6 +86,18 @@ describe("collaborative NoteSession", () => {
 
     applyTextChange(B.body, "hello from A & B", "local");
     expect(A.body.toString()).toBe("hello from A & B");
+  });
+
+  it("converges emoji/non-BMP edits without wedging a lone surrogate", () => {
+    const brain = fakeBrain();
+    const A = join(brain, "emoji");
+    const B = join(brain, "emoji");
+    applyTextChange(A.body, "hi 😀 there", "local");
+    expect(B.body.toString()).toBe("hi 😀 there");
+    applyTextChange(B.body, "hi 😁 there", "local"); // swap the emoji from the other client
+    expect(A.body.toString()).toBe("hi 😁 there");
+    const lone = /[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/;
+    expect(lone.test(A.body.toString())).toBe(false);
   });
 
   it("merges concurrent edits (CRDT, no lost writes)", () => {

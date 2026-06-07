@@ -31,6 +31,10 @@ import type { Broadcaster, BroadcastMsg } from "./broadcast.js";
 type ServerConn = Conn<ServerMsg, ClientMsg>;
 type MaybeAsync<T> = T | Promise<T>;
 
+// Cap on a single awareness (presence) payload — enough for cursor + small selection
+// + user identity, but bounds the verbatim-relayed blob so it can't be an amplifier.
+const MAX_AWARENESS_STATE = 16_384;
+
 // A connection's access policy (built from token -> principal -> role by the
 // ws-server; tests/internal callers use ALLOW_ALL). Predicates may be sync or
 // async (an async store needs an await to resolve roles). `kind` lets the WS write
@@ -91,6 +95,7 @@ export class SpaceHub {
   private embedder: Embedder;
   private maxLoadedDocs: number;
   private limiter?: RateLimiter;
+  private awarenessLimiter?: RateLimiter; // separate, looser budget for ephemeral presence
   private broadcaster?: Broadcaster;
   private unsubscribe?: () => void; // tear down the broadcaster subscription on close()
   private remoteSeen = new Map<string, number>(); // per-doc high-water seq (dedup redelivery)
@@ -102,7 +107,12 @@ export class SpaceHub {
     this.snapshotEvery = opts.snapshotEvery ?? 50;
     this.embedder = opts.embedder ?? new HashingEmbedder();
     this.maxLoadedDocs = opts.maxLoadedDocs ?? 0;
-    if (opts.rateLimit) this.limiter = new RateLimiter(opts.rateLimit.capacity, opts.rateLimit.refillPerSec);
+    if (opts.rateLimit) {
+      this.limiter = new RateLimiter(opts.rateLimit.capacity, opts.rateLimit.refillPerSec);
+      // Presence is frequent, so it gets its own much larger bucket — but a bucket,
+      // not a free pass: a malicious client can't drive unbounded fan-out/amplification.
+      this.awarenessLimiter = new RateLimiter(Math.max(opts.rateLimit.capacity * 20, 200), Math.max(opts.rateLimit.refillPerSec * 20, 200));
+    }
     this.broadcaster = opts.broadcaster;
     if (this.broadcaster) this.unsubscribe = this.broadcaster.subscribe((msg) => void this.onRemoteUpdate(msg));
   }
@@ -220,14 +230,16 @@ export class SpaceHub {
   private async handle(conn: ConnState, msg: ClientMsg): Promise<void> {
     // Per-principal WS message rate limit (each update triggers a reindex, so the
     // write path is relatively expensive — don't let one principal flood it).
-    // Awareness is exempt: it's ephemeral presence (cursor moves are frequent and
-    // already throttled client-side), persists nothing, and only relays bytes.
+    // Awareness uses a separate, looser limiter (checked in its case below), not the
+    // write-path one — presence is frequent but must still have a server-side ceiling.
     if (msg.t !== "awareness" && this.limiter && conn.auth.principalId && !this.limiter.allow(conn.auth.principalId)) {
       return conn.ch.send({ t: "error", code: "rate_limited", message: "rate limit exceeded" });
     }
     switch (msg.t) {
       case "awareness": {
         if (!(await conn.auth.canRead(msg.space))) return this.deny(conn, "read", msg.space);
+        if (msg.state.length > MAX_AWARENESS_STATE) return; // drop oversized presence blobs (amplification guard)
+        if (this.awarenessLimiter && conn.auth.principalId && !this.awarenessLimiter.allow(conn.auth.principalId)) return; // bounded fan-out
         // Ephemeral: fan out to the doc's other watchers; never touch the store.
         const key = docKey(msg.space, msg.note);
         for (const other of this.conns) {

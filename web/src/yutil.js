@@ -15,10 +15,18 @@ export function b64dec(str) {
   return u8;
 }
 
+const isHigh = (cc) => cc >= 0xd800 && cc <= 0xdbff;
+const isLow = (cc) => cc >= 0xdc00 && cc <= 0xdfff;
+
 // Smallest single-range edit between two strings: the length of the shared prefix,
 // how many old chars to delete, and the inserted slice. Good enough for a textarea
 // (one contiguous change per keystroke/paste); falls back to a full replace if both
 // ends differ, which is still correct.
+//
+// Surrogate-safe: the prefix/suffix scan counts UTF-16 code units, so a boundary can
+// land between an emoji's two halves. We snap both ends OFF any pair so a delete/
+// insert never begins or ends mid-character — otherwise a concurrent collaborator's
+// op at that sub-character index could wedge a lone surrogate the doc converges to.
 export function diffRange(oldStr, newStr) {
   if (oldStr === newStr) return null;
   let start = 0;
@@ -29,6 +37,15 @@ export function diffRange(oldStr, newStr) {
   while (endOld > start && endNew > start && oldStr[endOld - 1] === newStr[endNew - 1]) {
     endOld--;
     endNew--;
+  }
+  // if `start` split a pair (it sits on a low surrogate whose high is in the prefix),
+  // back it up by one so the whole character is inside the edit
+  if (start > 0 && isLow(oldStr.charCodeAt(start)) && isHigh(oldStr.charCodeAt(start - 1))) start--;
+  // if the suffix begins mid-pair (its first kept char is a low surrogate whose high
+  // is in the edit), push both boundaries forward so the pair stays together
+  if (endOld < oldStr.length && isLow(oldStr.charCodeAt(endOld)) && isHigh(oldStr.charCodeAt(endOld - 1))) {
+    endOld++;
+    endNew++;
   }
   return { index: start, remove: endOld - start, insert: newStr.slice(start, endNew) };
 }

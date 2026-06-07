@@ -155,10 +155,15 @@ with the role — they only narrow it. Implemented:
   links→`[[Title]]`), `export.ts` (`exportVault`, incremental via a sync manifest
   `id→{rel,vaultHash,brainHash}`), `sync.ts` (`syncVault` — per-note three-way
   reconcile: propagates vault-only and brain-only edits, creates in both directions,
-  resolves both-sides conflicts by policy [default brain-wins, vault copy preserved in
-  a `.conflict.md` sidecar + note tagged `sync-conflict`]). Vault/brain hashes are
-  tracked independently so a settled tree re-syncs as a no-op. `npm run export|sync`.
-  **Verified** (`brain/test/obsidian-sync.test.ts`, 7 cases incl. round-trip stability).
+  resolves both-sides conflicts by policy [default brain-wins, vault copy preserved
+  under `.cephalopod/conflicts/` (outside the synced tree, so it isn't re-imported) +
+  note tagged `sync-conflict`]). Vault/brain hashes are tracked independently so a
+  settled tree re-syncs as a no-op. **All filesystem writes/deletes are contained**:
+  `props.path`/title are sanitized (no `..`/absolute) and every write is gated by an
+  `insideVault` check (defense-in-depth vs. a tampered manifest); the manifest load is
+  corruption-tolerant and saved atomically (temp+rename). `npm run export|sync`.
+  **Verified** (`brain/test/obsidian-sync.test.ts`, 10 cases incl. round-trip
+  stability, traversal containment, and conflict-sidecar non-duplication).
 - **D — remaining:** attachments/blob store, VS Code plugin, Rust arm.
 - **E — Ops:** full-stack `docker-compose` (brain + web), metrics/tracing,
   backup/restore tooling, `ARCHITECTURE.md`, open the PR.

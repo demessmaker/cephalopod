@@ -2,6 +2,7 @@
 // vault exporter and the bidirectional sync. Renders YAML frontmatter (the subset
 // `parseFrontmatter` understands) + a body whose id-form wikilinks are rewritten
 // back to human-friendly `[[Title]]` form for the vault.
+import { resolve, sep } from "node:path";
 import type { NoteSnapshot } from "../hub.js";
 
 // !?[[ type:: target #anchor | alias ]] — same shape the importer parses.
@@ -18,17 +19,45 @@ export function asTags(v: unknown): string[] {
   return [];
 }
 
-// A filesystem-safe file name for a note title (Obsidian forbids these chars).
+// A filesystem-safe file name for a note title (Obsidian forbids these chars; we
+// also strip path separators, null bytes, and a leading-dots-only name so a title
+// can never introduce a path segment or escape its folder).
 export function safeFileName(title: string): string {
-  const cleaned = (title || "untitled").replace(/[\\/:*?"<>|]/g, "-").replace(/\s+/g, " ").trim();
-  return (cleaned || "untitled") + ".md";
+  const cleaned = (title || "untitled")
+    .replace(/\0/g, "")
+    .replace(/[\\/:*?"<>|]/g, "-")
+    .replace(/\s+/g, " ")
+    .trim();
+  const safe = /^\.+$/.test(cleaned) ? "" : cleaned; // "." / ".." -> untitled
+  return (safe || "untitled") + ".md";
 }
 
-// The vault-relative path a note serializes to: <props.path>/<title>.md.
+// Sanitize a note's `props.path` into a contained relative directory: split on any
+// separator, drop empty / "." / ".." / null-bearing segments (so it can't escape
+// the vault or be absolute), and strip forbidden chars per segment.
+export function safeDir(dir: unknown): string {
+  if (typeof dir !== "string") return "";
+  return dir
+    .split(/[\\/]+/)
+    .map((seg) => seg.replace(/\0/g, "").trim())
+    .filter((seg) => seg && seg !== "." && seg !== "..")
+    .map((seg) => seg.replace(/[:*?"<>|]/g, "-"))
+    .join("/");
+}
+
+// The vault-relative path a note serializes to: <sanitized props.path>/<title>.md.
 export function notePath(snap: NoteSnapshot): string {
-  const dir = typeof snap.props.path === "string" ? snap.props.path : "";
+  const dir = safeDir(snap.props.path);
   const file = safeFileName(snap.title);
   return dir ? `${dir}/${file}` : file;
+}
+
+// Containment guard (defense-in-depth, incl. tampered manifest `rel`s): true iff
+// `full` resolves to a path at/under `vaultPath`. Gate every write/delete with this.
+export function insideVault(vaultPath: string, full: string): boolean {
+  const root = resolve(vaultPath);
+  const target = resolve(full);
+  return target === root || target.startsWith(root + sep);
 }
 
 // Emit a frontmatter block parseable by `parseFrontmatter` (scalars + inline lists).

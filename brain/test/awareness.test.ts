@@ -41,7 +41,7 @@ describe("awareness/presence relay", () => {
     expect(await hub.hasNote("kb", "n_1")).toBe(false);
   });
 
-  it("is exempt from the per-principal message rate limit", async () => {
+  it("uses a separate, looser budget than the write-path rate limit", async () => {
     const hub = new SpaceHub(new SqliteStore(":memory:"), { rateLimit: { capacity: 2, refillPerSec: 0 } });
     const a = fakeConn(), b = fakeConn();
     const ca = hub.addConnection(a.ch, ALLOW("a"));
@@ -50,11 +50,25 @@ describe("awareness/presence relay", () => {
     b.recv({ t: "open", space: "kb", note: "n_1" });
     await ca.tail;
 
-    // a burst of presence well beyond the bucket — none rejected
+    // a presence burst far beyond the cap-2 write-path bucket — relayed, not rejected
     for (let i = 0; i < 20; i++) a.recv({ t: "awareness", space: "kb", note: "n_1", state: `s${i}` });
     await ca.tail;
 
     expect(a.sent.filter((m) => m.t === "error" && (m as any).code === "rate_limited")).toHaveLength(0);
     expect(b.sent.filter((m) => m.t === "awareness").length).toBe(20);
+  });
+
+  it("drops an oversized presence blob (amplification guard)", async () => {
+    const hub = new SpaceHub(new SqliteStore(":memory:"));
+    const a = fakeConn(), b = fakeConn();
+    const ca = hub.addConnection(a.ch, ALLOW("a"));
+    hub.addConnection(b.ch, ALLOW("b"));
+    a.recv({ t: "open", space: "kb", note: "n_1" });
+    b.recv({ t: "open", space: "kb", note: "n_1" });
+    await ca.tail;
+
+    a.recv({ t: "awareness", space: "kb", note: "n_1", state: "x".repeat(16_385) });
+    await ca.tail;
+    expect(b.sent.filter((m) => m.t === "awareness")).toHaveLength(0); // not fanned out
   });
 });

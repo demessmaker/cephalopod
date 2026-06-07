@@ -100,8 +100,11 @@ function startEdit(id) {
   const unbind = bindTextarea(session, ta);
   const renderPresence = () => {
     const peers = session.peers();
+    // peer color is untrusted (from awareness) — only allow a hex literal, else the
+    // CSS context (style="color:…") would accept arbitrary declarations
+    const safeColor = (c) => (/^#[0-9a-f]{3,8}$/i.test(c || "") ? c : "#888");
     $("presence").innerHTML = peers.length
-      ? "editing: " + peers.map((p) => `<span class="peer" style="color:${esc(p.color || "#888")}">${esc(p.name || "?")}</span>`).join(", ")
+      ? "editing: " + peers.map((p) => `<span class="peer" style="color:${safeColor(p.color)}">${esc(p.name || "?")}</span>`).join(", ")
       : "";
   };
   session.awareness.on("change", renderPresence);
