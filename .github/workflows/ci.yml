@@ -18,7 +18,7 @@ jobs:
       # mcp/arm/web integration tests import brain's source, so it needs deps too).
       - name: Install dependencies
         run: |
-          for pkg in core brain mcp arm web spike; do
+          for pkg in core brain mcp arm web spike vscode; do
             echo "::group::install $pkg"
             (cd "$pkg" && npm install --no-audit --no-fund)
             echo "::endgroup::"
@@ -26,7 +26,7 @@ jobs:
 
       - name: Typecheck (TS packages)
         run: |
-          for pkg in core brain mcp arm; do
+          for pkg in core brain mcp arm vscode; do
             echo "::group::typecheck $pkg"
             (cd "$pkg" && npx tsc --noEmit)
             echo "::endgroup::"
@@ -34,7 +34,7 @@ jobs:
 
       - name: Test
         run: |
-          for pkg in core brain mcp arm web spike; do
+          for pkg in core brain mcp arm web spike vscode; do
             echo "::group::test $pkg"
             (cd "$pkg" && npm test)
             echo "::endgroup::"

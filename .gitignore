@@ -12,6 +12,9 @@ node_modules/
 **/.vite/
 *.log
 
+# Build output (e.g. the bundled VS Code extension: vscode/out/extension.cjs)
+**/out/
+
 # Env / secrets
 .env
 **/.env*

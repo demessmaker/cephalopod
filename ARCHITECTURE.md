@@ -22,6 +22,7 @@ offline, and stream conflict-free **deltas** back.
 | **`mcp/`** | Model Context Protocol server — the agent-facing surface: tools (`create_note`, `search`, `neighbors`, …), note **resources** with live `resources/updated` subscriptions, and guided **prompts**. Talks to the brain over HTTP+WS with an agent token. |
 | **`arm/`** | A developer's local replica (CLI): offline disk cache, edit-offline → reconnect → sync, pull-a-scope. The reference Yjs client the browser editor mirrors. |
 | **`web/`** | Build-less graph explorer: search → force-directed subgraph → click-to-expand → live refresh, plus in-browser collaborative editing (Yjs + presence). Serves static assets and reverse-proxies `/v1` to the brain. |
+| **`vscode/`** | VS Code extension. Notes open as live markdown buffers via a virtual file system (`cephalopod:/<id>.md`); a pure `EditorSession` (no `vscode` dependency) syncs them over the same WS handshake as the arm, mapping each save to a minimal `Y.Text` edit. The editor glue (FS provider, Explorer tree, status bar, commands) is a thin layer over it. |
 | **`spike/`** | Frozen M0 convergence prototype (validated Yjs + lazy-neighborhood at 250k nodes). Not part of the running system. |
 
 ```
@@ -208,6 +209,22 @@ renders a force-directed subgraph; an **Edit** toggle opens a CRDT `NoteSession`
 (mirroring the arm's handshake) bound to a `<textarea>` via a surrogate-safe minimal
 diff, with a live **presence** bar driven by the ephemeral `awareness` relay. The
 server (`serve.mjs`, pure Node stdlib) serves assets and proxies `/v1` to the brain.
+
+### 9.1 VS Code extension (`vscode/`)
+
+The same handshake, wired into an editor instead of a browser. A note is surfaced
+through a `FileSystemProvider` registered for the `cephalopod:` scheme, so
+`cephalopod:/<id>.md` opens as a normal markdown buffer. The buffer is backed by
+`EditorSession` — a `vscode`-free, headlessly testable replica that holds per-note
+`Y.Doc`s and syncs deltas over the brain's WS relay. A save passes the whole buffer
+to `setBody`, which maps it to the **smallest** `Y.Text` edit (the same
+surrogate-safe diff the web editor uses) so concurrent collaborators converge; a
+remote delta fires `onRemoteChange`, which the FS provider turns into an
+`onDidChangeFile` so the open buffer refreshes (when it isn't dirty). Offline edits
+queue in memory and flush on the next reconnect handshake. Title/tags are LWW fields
+edited via commands, not parsed out of the buffer. Build is a single esbuild bundle
+(`out/extension.cjs`); the sync engine + diff are covered by tests against a real
+brain, while the thin editor glue needs a running VS Code host.
 
 ---
 

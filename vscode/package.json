@@ -1,0 +1,83 @@
+{
+  "name": "cephalopod-vscode",
+  "displayName": "Cephalopod",
+  "description": "Edit your team's Cephalopod knowledge graph from VS Code — notes as live, CRDT-synced markdown buffers.",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "publisher": "cephalopod",
+  "engines": {
+    "vscode": "^1.85.0"
+  },
+  "categories": ["Notebooks", "Other"],
+  "main": "./out/extension.cjs",
+  "activationEvents": ["onStartupFinished", "onFileSystem:cephalopod"],
+  "contributes": {
+    "configuration": {
+      "title": "Cephalopod",
+      "properties": {
+        "cephalopod.wsUrl": {
+          "type": "string",
+          "default": "ws://localhost:7700",
+          "description": "Brain WebSocket sync relay URL."
+        },
+        "cephalopod.httpUrl": {
+          "type": "string",
+          "default": "http://localhost:7701",
+          "description": "Brain HTTP API base URL (used for search and scope pulls)."
+        },
+        "cephalopod.space": {
+          "type": "string",
+          "default": "",
+          "description": "The space (graph) this window edits."
+        },
+        "cephalopod.token": {
+          "type": "string",
+          "default": "",
+          "description": "API token. Prefer the 'Cephalopod: Set Token' command, which stores it in SecretStorage instead of settings."
+        }
+      }
+    },
+    "commands": [
+      { "command": "cephalopod.openNote", "title": "Open Note…", "category": "Cephalopod", "icon": "$(search)" },
+      { "command": "cephalopod.newNote", "title": "New Note…", "category": "Cephalopod", "icon": "$(add)" },
+      { "command": "cephalopod.setTitle", "title": "Set Note Title…", "category": "Cephalopod" },
+      { "command": "cephalopod.pullScope", "title": "Pull Scope (note + neighbors)…", "category": "Cephalopod" },
+      { "command": "cephalopod.reconnect", "title": "Reconnect", "category": "Cephalopod", "icon": "$(refresh)" },
+      { "command": "cephalopod.setToken", "title": "Set Token…", "category": "Cephalopod" }
+    ],
+    "views": {
+      "explorer": [{ "id": "cephalopodNotes", "name": "Cephalopod" }]
+    },
+    "menus": {
+      "view/title": [
+        { "command": "cephalopod.newNote", "when": "view == cephalopodNotes", "group": "navigation@1" },
+        { "command": "cephalopod.openNote", "when": "view == cephalopodNotes", "group": "navigation@2" },
+        { "command": "cephalopod.reconnect", "when": "view == cephalopodNotes", "group": "navigation@3" }
+      ],
+      "view/item/context": [
+        { "command": "cephalopod.setTitle", "when": "view == cephalopodNotes && viewItem == cephalopodNote" }
+      ]
+    }
+  },
+  "scripts": {
+    "build": "esbuild src/extension.ts --bundle --platform=node --format=cjs --external:vscode --outfile=out/extension.cjs",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "@noble/hashes": "^1.5.0",
+    "ws": "^8.18.0",
+    "yjs": "^13.6.20"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.0",
+    "@types/vscode": "^1.85.0",
+    "@types/ws": "^8.5.13",
+    "better-sqlite3": "^11.7.0",
+    "esbuild": "^0.24.0",
+    "tsx": "^4.19.2",
+    "typescript": "^5.7.2",
+    "vitest": "^2.1.8"
+  }
+}
