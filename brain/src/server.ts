@@ -64,6 +64,7 @@ console.log(`🐙 brain WS relay on ws://localhost:${WS_PORT}`);
 async function shutdown() {
   console.log("\nsnapshotting + closing…");
   await hub.snapshotAll();
+  hub.close();
   store.close();
   wss.close();
   http.close(() => process.exit(0));

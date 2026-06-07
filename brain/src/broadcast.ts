@@ -17,12 +17,15 @@ export interface BroadcastMsg {
   space: string;
   note: string;
   update: string; // b64 raw CRDT delta (same wire form as a WS `update`)
+  seq: number; // the store's monotonic log seq — lets recipients dedup redelivery
 }
 
 export interface Broadcaster {
   readonly id: string; // this instance's origin id
   publish(msg: BroadcastMsg): void | Promise<void>;
-  subscribe(handler: (msg: BroadcastMsg) => void): void;
+  // Register a handler; returns an unsubscribe fn (SpaceHub.close calls it so a torn
+  // -down hub stops processing messages and doesn't leak a listener on the broker).
+  subscribe(handler: (msg: BroadcastMsg) => void): () => void;
 }
 
 // In-process fan-out bus shared by multiple SpaceHub instances — stands in for a
@@ -44,6 +47,7 @@ export class LocalBus {
       },
       subscribe(handler: (msg: BroadcastMsg) => void) {
         emitter.on("msg", handler);
+        return () => emitter.off("msg", handler);
       },
     };
   }

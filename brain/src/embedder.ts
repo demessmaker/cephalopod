@@ -77,6 +77,10 @@ export class ApiEmbedder implements Embedder {
       const raw = json.data?.[0]?.embedding;
       if (!raw) throw new Error(`embedder ${this.url}: no embedding in response`);
       if (raw.length !== this.dim) throw new Error(`embedder dim mismatch: got ${raw.length}, expected ${this.dim}`);
+      // Guard value errors too (null/NaN/strings): a non-finite entry would make
+      // l2normalize's norm NaN (NaN || 1 === 1), storing NaN that poisons every
+      // future cosine comparison. Reject rather than corrupt the index.
+      if (!raw.every((x) => Number.isFinite(x))) throw new Error(`embedder ${this.url}: non-finite value in embedding`);
       return l2normalize(Float32Array.from(raw));
     } finally {
       clearTimeout(timer);

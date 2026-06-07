@@ -332,7 +332,7 @@ export function createHttpServer(hub: SpaceHub, auth: Auth, opts: HttpOptions = 
 
   const maxBody = opts.maxBodyBytes ?? 1_000_000;
 
-  const server = createServer((req, res) => {
+  const server = createServer(async (req, res) => {
     const url = new URL(req.url ?? "/", "http://localhost");
 
     // unauthenticated liveness check (for containers/orchestration)
@@ -340,6 +340,19 @@ export function createHttpServer(hub: SpaceHub, auth: Auth, opts: HttpOptions = 
       res.writeHead(200, { "content-type": "application/json" });
       return res.end(JSON.stringify({ status: "ok" }));
     }
+
+    // Authenticate + rate-limit BEFORE buffering the body — both depend only on
+    // request headers, so an unauthenticated or throttled client is shed without
+    // first reading its (up to maxBody) payload. The IncomingMessage stays paused
+    // until we attach the "data" listener below, so no body bytes are lost.
+    const token = req.headers.authorization?.replace(/^Bearer\s+/i, "");
+    const principal = await auth.authenticate(token);
+    if (!principal) return err(res, 401, "unauthorized");
+    if (limiter && !limiter.allow(token!)) {
+      res.writeHead(429, { "content-type": "application/json", "retry-after": "1" });
+      return res.end(JSON.stringify({ error: "rate limited", code: "rate_limited" }));
+    }
+    const caps = await auth.capabilities(token);
 
     let raw = "";
     let aborted = false;
@@ -355,15 +368,6 @@ export function createHttpServer(hub: SpaceHub, auth: Auth, opts: HttpOptions = 
     });
     req.on("end", async () => {
       if (aborted) return;
-      const token = req.headers.authorization?.replace(/^Bearer\s+/i, "");
-      const principal = await auth.authenticate(token);
-      if (!principal) return err(res, 401, "unauthorized");
-      if (limiter && !limiter.allow(token!)) {
-        res.writeHead(429, { "content-type": "application/json", "retry-after": "1" });
-        return res.end(JSON.stringify({ error: "rate limited", code: "rate_limited" }));
-      }
-      const caps = await auth.capabilities(token);
-
       let body: any = undefined;
       if (raw) {
         try {

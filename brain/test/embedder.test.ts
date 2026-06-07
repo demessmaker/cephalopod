@@ -47,6 +47,13 @@ describe("ApiEmbedder (async model seam)", () => {
     await expect(emb.embed("x")).rejects.toThrow(/500/);
   });
 
+  it("rejects a non-finite value in the vector (would poison every cosine score)", async () => {
+    // JSON has no NaN; a bad model emits null/strings — Number.isFinite catches both.
+    const fetchImpl = (async () => new Response(JSON.stringify({ data: [{ embedding: [1, 2, null, 4, 0, 0, 0, 0] }] }), { status: 200 })) as unknown as typeof fetch;
+    const emb = new ApiEmbedder({ url: "http://stub/v1/embeddings", model: "m", dim: 8, fetchImpl });
+    await expect(emb.embed("x")).rejects.toThrow(/non-finite/);
+  });
+
   it("embedderFromEnv defaults to hashing, and selects the API embedder when a URL is set", () => {
     expect(embedderFromEnv({} as NodeJS.ProcessEnv)).toBeInstanceOf(HashingEmbedder);
     const e = embedderFromEnv({ CEPH_EMBED_URL: "http://x/v1/embeddings", CEPH_EMBED_DIM: "8" } as unknown as NodeJS.ProcessEnv);
@@ -69,5 +76,15 @@ describe("the hub indexes and queries through an async embedder", () => {
     // the write path (index) AND the query path both went through the async model
     expect(stub.calls).toContain("charges customers");
     expect(stub.calls.some((c) => c.includes("Billing"))).toBe(true);
+  });
+
+  it("a failing embedder does not fail the write or de-sync the rest of the index", async () => {
+    // A remote model that always errors (timeout/5xx/bad vector). The write must
+    // still succeed and node/FTS/edges must still index — only semantic lags.
+    const embedder = { dim: 8, embed: async () => { throw new Error("model down"); } };
+    const hub = new SpaceHub(new SqliteStore(":memory:"), { embedder });
+    const id = await hub.createNote("kb", { title: "Resilient", body: "still searchable text" });
+    expect((await hub.getNoteSnapshot("kb", id)).title).toBe("Resilient"); // write durable
+    expect((await hub.search("kb", "searchable")).some((n) => n.id === id)).toBe(true); // FTS intact
   });
 });

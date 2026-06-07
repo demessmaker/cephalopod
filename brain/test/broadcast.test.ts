@@ -5,7 +5,7 @@
 import { describe, it, expect } from "vitest";
 import { SqliteStore } from "../src/store/sqlite.js";
 import { SpaceHub, ALLOW_ALL } from "../src/hub.js";
-import { LocalBus } from "../src/broadcast.js";
+import { LocalBus, type Broadcaster, type BroadcastMsg } from "../src/broadcast.js";
 import type { Conn, ClientMsg, ServerMsg } from "../src/core/protocol.js";
 
 function fakeConn() {
@@ -65,5 +65,48 @@ describe("cross-instance fan-out (relay sharding)", () => {
     await hub.createNote("kb", { title: "Local", body: "only" }, "n_3");
     await hub.patchNote("kb", "n_3", { body: "changed" });
     expect((await hub.getNoteSnapshot("kb", "n_3")).body).toBe("changed");
+  });
+
+  it("dedups a redelivered message (a flaky broker won't double-fan to clients)", async () => {
+    const store = new SqliteStore(":memory:");
+    const aMsgs: BroadcastMsg[] = [];
+    const aBc: Broadcaster = { id: "A", publish: (m) => aMsgs.push(m as BroadcastMsg), subscribe: () => () => {} };
+    let bHandler: ((m: BroadcastMsg) => void) | undefined;
+    const bBc: Broadcaster = { id: "B", publish: () => {}, subscribe: (h) => ((bHandler = h), () => (bHandler = undefined)) };
+    const hubA = new SpaceHub(store, { broadcaster: aBc });
+    const hubB = new SpaceHub(store, { broadcaster: bBc });
+
+    await hubA.createNote("kb", { title: "T", body: "v1" }, "n_1");
+    const reader = fakeConn();
+    const conn = hubB.addConnection(reader.ch, ALLOW_ALL);
+    reader.recv({ t: "open", space: "kb", note: "n_1" });
+    await conn.tail;
+
+    await hubA.patchNote("kb", "n_1", { body: "v2" });
+    const last = aMsgs[aMsgs.length - 1]; // the patch delta A published
+    bHandler!(last);
+    await settle();
+    bHandler!(last); // exact redelivery (same seq)
+    await settle();
+
+    expect(reader.sent.filter((m) => m.t === "update" && m.note === "n_1")).toHaveLength(1);
+  });
+
+  it("close() tears down the subscription so a stale hub stops processing", async () => {
+    const store = new SqliteStore(":memory:");
+    const bus = new LocalBus();
+    const hubA = new SpaceHub(store, { broadcaster: bus.connect("A") });
+    const hubB = new SpaceHub(store, { broadcaster: bus.connect("B") });
+    await hubA.createNote("kb", { title: "T", body: "v1" }, "n_1");
+    const reader = fakeConn();
+    const conn = hubB.addConnection(reader.ch, ALLOW_ALL);
+    reader.recv({ t: "open", space: "kb", note: "n_1" });
+    await conn.tail;
+
+    hubB.close(); // unsubscribe from the bus
+    await hubA.patchNote("kb", "n_1", { body: "v2 after close" });
+    await settle();
+
+    expect(reader.sent.filter((m) => m.t === "update" && m.note === "n_1")).toHaveLength(0);
   });
 });

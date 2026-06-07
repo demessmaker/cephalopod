@@ -92,6 +92,8 @@ export class SpaceHub {
   private maxLoadedDocs: number;
   private limiter?: RateLimiter;
   private broadcaster?: Broadcaster;
+  private unsubscribe?: () => void; // tear down the broadcaster subscription on close()
+  private remoteSeen = new Map<string, number>(); // per-doc high-water seq (dedup redelivery)
   private docLocks = new Map<string, Promise<unknown>>(); // per-doc write serialization
   private loading = new Map<string, Promise<DocState>>(); // in-flight loads (load-guard)
 
@@ -102,7 +104,14 @@ export class SpaceHub {
     this.maxLoadedDocs = opts.maxLoadedDocs ?? 0;
     if (opts.rateLimit) this.limiter = new RateLimiter(opts.rateLimit.capacity, opts.rateLimit.refillPerSec);
     this.broadcaster = opts.broadcaster;
-    this.broadcaster?.subscribe((msg) => void this.onRemoteUpdate(msg));
+    if (this.broadcaster) this.unsubscribe = this.broadcaster.subscribe((msg) => void this.onRemoteUpdate(msg));
+  }
+
+  // Release the broadcaster subscription (a torn-down hub must stop processing
+  // messages and not leak a listener on the shared broker).
+  close(): void {
+    this.unsubscribe?.();
+    this.unsubscribe = undefined;
   }
 
   // C2: a delta committed on another instance (sharing our store). The store is
@@ -113,13 +122,20 @@ export class SpaceHub {
     if (msg.origin === this.broadcaster?.id) return; // skip our own publishes
     const key = docKey(msg.space, msg.note);
     const bytes = b64.dec(msg.update);
+    // Apply + fan out under the doc lock so concurrent remote messages for the same
+    // note deliver to clients in CRDT-causal (seq) order — matching the local path.
     await this.withDocLock(key, async () => {
+      // A real broker can reorder or redeliver. Dedup on the store's monotonic log
+      // seq: applying is idempotent in Yjs, but re-fanning would send clients a
+      // duplicate `update` frame. Skip anything we've already seen.
+      if (msg.seq <= (this.remoteSeen.get(key) ?? 0)) return;
+      this.remoteSeen.set(key, msg.seq);
       const st = this.docs.get(key);
       if (st) Y.applyUpdate(st.doc, bytes, "remote");
+      for (const conn of this.conns) {
+        if (conn.open.has(key)) conn.ch.send({ t: "update", space: msg.space, note: msg.note, update: msg.update });
+      }
     });
-    for (const conn of this.conns) {
-      if (conn.open.has(key)) conn.ch.send({ t: "update", space: msg.space, note: msg.note, update: msg.update });
-    }
   }
 
   // Serialize writes to one doc (the apply→gate→rollback→commit section must be
@@ -346,7 +362,14 @@ export class SpaceHub {
       other.ch.send({ t: "update", space, note, update: raw });
     }
     // C2: fan the delta out to other instances sharing our store (no-op single-node).
-    this.broadcaster?.publish({ origin: this.broadcaster.id, space, note, update: raw });
+    // seq lets recipients dedup broker redelivery. Publish off the write path, but
+    // surface broker errors (a swallowed failure means other instances silently
+    // never see this delta) rather than dropping them.
+    if (this.broadcaster) {
+      Promise.resolve(this.broadcaster.publish({ origin: this.broadcaster.id, space, note, update: raw, seq: st.lastSeq })).catch((e) =>
+        console.warn(`[broadcast] publish failed for ${space}/${note}: ${(e as Error).message}`),
+      );
+    }
   }
 
   // Apply a server-side edit (HTTP/MCP) through the same write path as WS deltas.
@@ -611,7 +634,15 @@ export class SpaceHub {
     const body = h.body.toString();
     await this.store.upsertNode(space, { id: note, title, tags: h.tags.toArray(), stub: !!h.meta.get("stub") });
     await this.store.searchUpsert(space, note, title, body);
-    await this.store.upsertEmbedding(space, note, await this.embedder.embed(`${title}\n${body}`));
+    // A real embedder (ApiEmbedder) is a remote call that can time out / error /
+    // return a bad vector. Never let that fail the write or de-sync the rest of the
+    // derived index (node/FTS/edges) — degrade semantic search for this one note;
+    // it re-embeds on the next edit or rehydrate.
+    try {
+      await this.store.upsertEmbedding(space, note, await this.embedder.embed(`${title}\n${body}`));
+    } catch (err) {
+      console.warn(`[reindex] embedding skipped for ${space}/${note}: ${(err as Error).message}`);
+    }
     // Wikilink targets need async resolution (title->id, stub creation). Resolve
     // the distinct raw targets first, then derive edges with a sync map lookup.
     const raw = deriveEdges(note, body, (t) => t);

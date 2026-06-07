@@ -10,9 +10,23 @@ import type { NodeSummary } from "../core/protocol.js";
 import type { EdgeRec } from "../core/wikilinks.js";
 import type { AsyncStore, LoadedDoc, LoadedDocMeta, Principal, Role, Snapshot } from "./store.js";
 
+type QueryFn = (sql: string, params?: unknown[]) => Promise<{ rows: any[] }>;
+
+// A dedicated connection checked out for a transaction. Under a real `pg.Pool`,
+// BEGIN/…/COMMIT must run on ONE connection — `pool.query` hands out a different
+// pooled connection per call, so a transaction issued that way isn't atomic at all.
+export interface PgConn {
+  query(sql: string, params?: unknown[]): Promise<{ rows: any[] }>;
+  release(): void;
+}
+
 export interface PgClient {
   query(sql: string, params?: unknown[]): Promise<{ rows: any[] }>;
   exec?(sql: string): Promise<unknown>; // multi-statement (PGlite); optional
+  // Check out a dedicated connection for a transaction. Pools MUST provide this;
+  // single-connection clients (PGlite) may omit it — transactions then run on the
+  // one connection they already serialize.
+  connect?(): Promise<PgConn>;
   close?(): Promise<void> | void;
 }
 
@@ -21,6 +35,11 @@ const toF32 = (v: unknown): Float32Array => {
   const u = toU8(v);
   return new Float32Array(new Uint8Array(u).buffer); // copy -> 4-byte aligned
 };
+// Bind a typed-array view as a Postgres `bytea`. node-postgres serializes Buffer,
+// not a bare Uint8Array view (and a view may be a window onto a larger buffer);
+// Buffer.from over the exact (buffer, offset, length) is correct for both pg and
+// PGlite (Buffer is a Uint8Array subclass).
+const toBuf = (v: Uint8Array): Buffer => Buffer.from(v.buffer, v.byteOffset, v.byteLength);
 const likeTag = (t: string) => `%"${t}"%`;
 
 export class PgStore implements AsyncStore {
@@ -31,6 +50,39 @@ export class PgStore implements AsyncStore {
   }
   private async one<T = any>(sql: string, params: unknown[] = []): Promise<T | undefined> {
     return (await this.q(sql, params)).rows[0];
+  }
+
+  // Run `fn` inside a single-connection transaction. With a pool, check out a
+  // dedicated connection so BEGIN/COMMIT and every statement between them share it;
+  // otherwise (PGlite) fall back to the one connection. Rolls back on throw.
+  private async withTx<T>(fn: (q: QueryFn) => Promise<T>): Promise<T> {
+    if (this.db.connect) {
+      const c = await this.db.connect();
+      try {
+        await c.query("BEGIN");
+        const r = await fn((sql, params) => c.query(sql, params ?? []));
+        await c.query("COMMIT");
+        return r;
+      } catch (e) {
+        try {
+          await c.query("ROLLBACK");
+        } catch {
+          /* connection may be unusable; release it regardless */
+        }
+        throw e;
+      } finally {
+        c.release();
+      }
+    }
+    await this.q("BEGIN");
+    try {
+      const r = await fn((sql, params) => this.q(sql, params ?? []));
+      await this.q("COMMIT");
+      return r;
+    } catch (e) {
+      await this.q("ROLLBACK").catch(() => {});
+      throw e;
+    }
   }
 
   // Run the schema. Idempotent (CREATE IF NOT EXISTS). Call once after construction.
@@ -74,7 +126,7 @@ export class PgStore implements AsyncStore {
   async appendUpdate(space: string, note: string, update: Uint8Array, actor: string, ts: number): Promise<number> {
     await this.ensureSpace(space);
     const r = await this.one("INSERT INTO updates(space, note, update_blob, actor, ts) VALUES ($1,$2,$3,$4,$5) RETURNING seq", [
-      space, note, update, actor, ts,
+      space, note, toBuf(update), actor, ts,
     ]);
     return Number(r.seq);
   }
@@ -98,22 +150,17 @@ export class PgStore implements AsyncStore {
     return (await this.q("SELECT DISTINCT note FROM updates WHERE space=$1 AND actor=$2 AND ts>=$3", [space, actor, sinceTs])).rows.map((r) => r.note);
   }
   async saveSnapshot(space: string, note: string, state: Uint8Array, seq: number): Promise<void> {
-    await this.q("BEGIN");
-    try {
-      const folded = Number((await this.one("SELECT MAX(ts) AS m FROM updates WHERE space=$1 AND note=$2 AND seq<=$3", [space, note, seq]))?.m ?? 0);
-      const prev = Number((await this.one("SELECT ts FROM snapshots WHERE space=$1 AND note=$2", [space, note]))?.ts ?? 0);
+    await this.withTx(async (q) => {
+      const folded = Number((await q("SELECT MAX(ts) AS m FROM updates WHERE space=$1 AND note=$2 AND seq<=$3", [space, note, seq])).rows[0]?.m ?? 0);
+      const prev = Number((await q("SELECT ts FROM snapshots WHERE space=$1 AND note=$2", [space, note])).rows[0]?.ts ?? 0);
       const coversTs = Math.max(folded, prev);
-      await this.q(
+      await q(
         `INSERT INTO snapshots(space, note, seq, state, ts) VALUES ($1,$2,$3,$4,$5)
          ON CONFLICT(space, note) DO UPDATE SET seq=excluded.seq, state=excluded.state, ts=excluded.ts`,
-        [space, note, seq, state, coversTs],
+        [space, note, seq, toBuf(state), coversTs],
       );
-      await this.q("DELETE FROM updates WHERE space=$1 AND note=$2 AND seq<=$3", [space, note, seq]);
-      await this.q("COMMIT");
-    } catch (e) {
-      await this.q("ROLLBACK");
-      throw e;
-    }
+      await q("DELETE FROM updates WHERE space=$1 AND note=$2 AND seq<=$3", [space, note, seq]);
+    });
   }
 
   // --- derived index ---
@@ -144,21 +191,16 @@ export class PgStore implements AsyncStore {
     return (await this.one("SELECT id FROM nodes WHERE space=$1 AND lower(title)=$2 AND stub=0 LIMIT 1", [space, titleLower]))?.id;
   }
   async replaceEdgesFrom(space: string, from: string, edges: EdgeRec[]): Promise<void> {
-    await this.q("BEGIN");
-    try {
-      await this.q("DELETE FROM edges WHERE space=$1 AND frm=$2", [space, from]);
+    await this.withTx(async (q) => {
+      await q("DELETE FROM edges WHERE space=$1 AND frm=$2", [space, from]);
       for (const e of edges) {
-        await this.q(
+        await q(
           `INSERT INTO edges(space, eid, frm, dst, type, origin) VALUES ($1,$2,$3,$4,$5,$6)
            ON CONFLICT(space, eid) DO UPDATE SET frm=excluded.frm, dst=excluded.dst, type=excluded.type, origin=excluded.origin`,
           [space, edgeId(e.from, e.to, e.type), e.from, e.to, e.type, e.origin],
         );
       }
-      await this.q("COMMIT");
-    } catch (e) {
-      await this.q("ROLLBACK");
-      throw e;
-    }
+    });
   }
   async edgesAdjacent(space: string, id: string, dir: "out" | "in" | "both"): Promise<EdgeRec[]> {
     const map = (r: any): EdgeRec => ({ from: r.frm, to: r.dst, type: r.type, origin: r.origin });
@@ -203,7 +245,7 @@ export class PgStore implements AsyncStore {
 
   // --- vector ---
   async upsertEmbedding(space: string, id: string, vec: Float32Array): Promise<void> {
-    const bytes = new Uint8Array(vec.buffer, vec.byteOffset, vec.byteLength);
+    const bytes = toBuf(new Uint8Array(vec.buffer, vec.byteOffset, vec.byteLength));
     await this.q(`INSERT INTO embeddings(space, id, vec) VALUES ($1,$2,$3) ON CONFLICT(space, id) DO UPDATE SET vec=excluded.vec`, [space, id, bytes]);
   }
   async deleteEmbedding(space: string, id: string): Promise<void> {
@@ -287,21 +329,16 @@ export class PgStore implements AsyncStore {
   }
 
   async purgeNote(space: string, id: string): Promise<void> {
-    await this.q("BEGIN");
-    try {
+    await this.withTx(async (q) => {
       for (const sql of [
         "DELETE FROM updates WHERE space=$1 AND note=$2",
         "DELETE FROM snapshots WHERE space=$1 AND note=$2",
         "DELETE FROM nodes WHERE space=$1 AND id=$2",
         "DELETE FROM notes_search WHERE space=$1 AND id=$2",
         "DELETE FROM embeddings WHERE space=$1 AND id=$2",
-      ]) await this.q(sql, [space, id]);
-      await this.q("DELETE FROM edges WHERE space=$1 AND (frm=$2 OR dst=$2)", [space, id]);
-      await this.q("COMMIT");
-    } catch (e) {
-      await this.q("ROLLBACK");
-      throw e;
-    }
+      ]) await q(sql, [space, id]);
+      await q("DELETE FROM edges WHERE space=$1 AND (frm=$2 OR dst=$2)", [space, id]);
+    });
   }
 
   async close(): Promise<void> {
@@ -314,10 +351,19 @@ export class PgStore implements AsyncStore {
 //   const store = new PgStore(pgPool(new Pool({ connectionString: process.env.DATABASE_URL })));
 //   await store.init();
 // (Tests use PGlite directly, which already satisfies PgClient.)
-export function pgPool(pool: { query(sql: string, params?: unknown[]): Promise<{ rows: any[] }>; end(): Promise<void> }): PgClient {
+export function pgPool(pool: {
+  query(sql: string, params?: unknown[]): Promise<{ rows: any[] }>;
+  connect(): Promise<{ query(sql: string, params?: unknown[]): Promise<{ rows: any[] }>; release(): void }>;
+  end(): Promise<void>;
+}): PgClient {
   return {
     query: (sql, params) => pool.query(sql, params),
     exec: (sql) => pool.query(sql),
+    // dedicated connection per transaction (BEGIN/COMMIT must not span the pool)
+    connect: async () => {
+      const c = await pool.connect();
+      return { query: (sql, params) => c.query(sql, params), release: () => c.release() };
+    },
     close: () => pool.end(),
   };
 }
