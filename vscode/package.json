@@ -34,7 +34,8 @@
         "cephalopod.token": {
           "type": "string",
           "default": "",
-          "description": "API token. Prefer the 'Cephalopod: Set Token' command, which stores it in SecretStorage instead of settings."
+          "markdownDeprecationMessage": "**Deprecated.** Storing the token here puts it in plaintext settings (synced across machines, committed to dotfiles, visible in the UI). Use the **Cephalopod: Set Token** command — it stores the token in SecretStorage, and any value left here is migrated there and cleared on activation.",
+          "description": "Deprecated — use the 'Cephalopod: Set Token' command (SecretStorage). Any value set here is migrated into SecretStorage and cleared on activation."
         }
       }
     },
@@ -61,6 +62,7 @@
     }
   },
   "scripts": {
+    "vscode:prepublish": "npm run build",
     "build": "esbuild src/extension.ts --bundle --platform=node --format=cjs --external:vscode --outfile=out/extension.cjs",
     "typecheck": "tsc --noEmit",
     "test": "vitest run"

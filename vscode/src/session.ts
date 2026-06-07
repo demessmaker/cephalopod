@@ -75,16 +75,34 @@ export class EditorSession {
     if (this.ws && this.ws.readyState === WebSocket.OPEN) this.ws.send(JSON.stringify(msg));
   }
 
-  connect(): Promise<void> {
+  // `timeoutMs` guards the pathological case where the relay accepts the TCP
+  // connection but never completes the WebSocket upgrade — without it the promise
+  // would neither resolve nor reject and a caller awaiting connect() hangs.
+  connect(timeoutMs = 10000): Promise<void> {
     return new Promise((resolve, reject) => {
       // token via Authorization header (not the URL) so it doesn't leak into logs
       const ws = new WebSocket(this.o.wsUrl, { headers: { authorization: `Bearer ${this.o.token}` } });
+      let settled = false;
+      const timer = setTimeout(() => {
+        if (settled) return;
+        settled = true;
+        try {
+          ws.terminate();
+        } catch {
+          /* already gone */
+        }
+        reject(new Error(`connect timed out after ${timeoutMs}ms`));
+      }, timeoutMs);
       ws.on("open", () => {
         this.ws = ws;
         this.connected = true;
         for (const id of this.working) this.openAndSync(id); // reconcile every open note
         this.onModelChange?.();
-        resolve();
+        if (!settled) {
+          settled = true;
+          clearTimeout(timer);
+          resolve();
+        }
       });
       // A drop AFTER connect must flip `connected` so later edits fall through to the
       // offline `dirty` queue instead of being swallowed by send(). reject() is a
@@ -96,7 +114,11 @@ export class EditorSession {
       });
       ws.on("error", (err) => {
         this.connected = false;
-        reject(err);
+        if (!settled) {
+          settled = true;
+          clearTimeout(timer);
+          reject(err);
+        }
       });
       ws.on("message", (data) => {
         this.lastMsgAt = Date.now();

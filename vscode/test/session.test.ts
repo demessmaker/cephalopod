@@ -4,6 +4,7 @@
 // and that offline edits queue and flush on reconnect.
 import { describe, it, expect, beforeAll, afterAll } from "vitest";
 import type { Server } from "node:http";
+import { createServer, type Server as NetServer } from "node:net";
 import { WebSocketServer } from "ws";
 import { SqliteStore } from "../../brain/src/store/sqlite.js";
 import { SpaceHub, type ConnAuth } from "../../brain/src/hub.js";
@@ -157,6 +158,17 @@ describe("EditorSession — live editing over the brain", () => {
 
     A.disconnect();
     B.disconnect();
+  });
+
+  it("connect() rejects on a half-open socket instead of hanging activation", async () => {
+    // a TCP server that accepts the connection but never speaks the WS upgrade
+    const stuck: NetServer = createServer(() => {});
+    await new Promise<void>((r) => stuck.listen(0, r));
+    const port = (stuck.address() as any).port;
+    const A = new EditorSession({ ...base, wsUrl: `ws://localhost:${port}` });
+    await expect(A.connect(200)).rejects.toThrow(/timed out/);
+    expect(A.connected).toBe(false);
+    stuck.close();
   });
 
   it("search and pullScope cache a focus note plus its neighbors", async () => {

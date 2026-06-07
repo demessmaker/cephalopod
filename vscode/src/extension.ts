@@ -48,18 +48,15 @@ class NoteFS implements vscode.FileSystemProvider {
 
   readFile(uri: vscode.Uri): Uint8Array {
     const id = idFromUri(uri);
-    if (!this.session.has(id)) this.session.openNote(id);
+    // Only notes deliberately opened (via the command/tree, which call openNote
+    // before showing the buffer) are served — a hand-typed URI doesn't fabricate
+    // an empty local doc.
+    if (!id || !this.session.has(id)) throw vscode.FileSystemError.FileNotFound(uri);
     return enc.encode(this.session.bodyText(id));
   }
 
   writeFile(uri: vscode.Uri, content: Uint8Array): void {
     this.session.setBody(idFromUri(uri), dec.decode(content));
-  }
-
-  // A remote refresh fired onDidChangeFile; surface that as a fresh mtime read.
-  touch(id: string): void {
-    this.mtimes.set(id, Date.now());
-    this._emitter.fire([{ type: vscode.FileChangeType.Changed, uri: noteUri(id) }]);
   }
 
   createDirectory(): void {}
@@ -97,8 +94,24 @@ class NotesTree implements vscode.TreeDataProvider<string> {
 export async function activate(context: vscode.ExtensionContext): Promise<void> {
   const cfg = () => vscode.workspace.getConfiguration("cephalopod");
   const space = cfg().get<string>("space") ?? "";
-  const token =
-    (await context.secrets.get("cephalopod.token")) ?? cfg().get<string>("token") ?? process.env.CEPH_TOKEN ?? "";
+
+  // The token lives ONLY in SecretStorage — never settings.json (which syncs
+  // across machines, gets committed to dotfiles, and is visible in the Settings
+  // UI). One-time migration: if a legacy `cephalopod.token` setting is present,
+  // lift it into SecretStorage and clear the plaintext value.
+  const resolveToken = async (): Promise<string> => {
+    const fromSecrets = await context.secrets.get("cephalopod.token");
+    if (fromSecrets) return fromSecrets;
+    const legacy = cfg().get<string>("token");
+    if (legacy) {
+      await context.secrets.store("cephalopod.token", legacy);
+      await cfg().update("token", undefined, vscode.ConfigurationTarget.Global);
+      await cfg().update("token", undefined, vscode.ConfigurationTarget.Workspace).then(undefined, () => {});
+      return legacy;
+    }
+    return "";
+  };
+  const token = await resolveToken();
 
   const session = new EditorSession({
     wsUrl: cfg().get<string>("wsUrl") ?? "ws://localhost:7700",
@@ -112,16 +125,26 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   const status = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Left, 100);
   status.command = "cephalopod.reconnect";
 
+  // onModelChange fires synchronously from inside Yjs's doc.on("update"); a throw
+  // here (e.g. a refresh after the view is disposed) would propagate into the
+  // CRDT/WS message loop, so it must never escape.
   const render = () => {
-    const s = session.status();
-    const dot = s.connected ? "$(cloud)" : "$(cloud-offline)";
-    const dirty = s.dirty.length ? ` · ${s.dirty.length} unsynced` : "";
-    status.text = `${dot} Cephalopod${space ? ` (${space})` : ""} · ${s.open}${dirty}`;
-    status.tooltip = s.connected ? "Connected to the brain" : "Offline — edits queue until reconnect";
-    status.show();
-    tree.refresh();
+    try {
+      const s = session.status();
+      const dot = s.connected ? "$(cloud)" : "$(cloud-offline)";
+      const dirty = s.dirty.length ? ` · ${s.dirty.length} unsynced` : "";
+      status.text = `${dot} Cephalopod${space ? ` (${space})` : ""} · ${s.open}${dirty}`;
+      status.tooltip = s.connected ? "Connected to the brain" : "Offline — edits queue until reconnect";
+      status.show();
+      tree.refresh();
+    } catch {
+      /* a disposed status bar / tree must not crash the sync loop */
+    }
   };
   session.onModelChange = render;
+  // Tear the session (live ws + handlers) down on deactivate/reload — context
+  // disposes the VS Code objects, not the EditorSession.
+  context.subscriptions.push({ dispose: () => session.disconnect() });
 
   const connect = async () => {
     if (!space || !token) {
@@ -201,13 +224,8 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     }),
   );
 
-  // Saving an open note writes the buffer through the session (it already does on
-  // FS writeFile, but VS Code's save also triggers this — keep them aligned).
-  context.subscriptions.push(
-    vscode.workspace.onDidSaveTextDocument((doc) => {
-      if (doc.uri.scheme === SCHEME) session.setBody(idFromUri(doc.uri), doc.getText());
-    }),
-  );
+  // Saves flow through the FileSystemProvider's writeFile (setBody), so no extra
+  // onDidSaveTextDocument hook is needed — it would just re-diff the same buffer.
 
   render();
   await connect();

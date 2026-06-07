@@ -39,3 +39,8 @@ jobs:
             (cd "$pkg" && npm test)
             echo "::endgroup::"
           done
+
+      # Validate the VS Code extension actually bundles (out/ is gitignored, so a
+      # broken bundle would otherwise only surface at `vsce package` time).
+      - name: Build VS Code extension bundle
+        run: (cd vscode && npm run build)

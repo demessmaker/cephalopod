@@ -33,7 +33,8 @@ needs a running editor host.
 | `cephalopod.wsUrl` | `ws://localhost:7700` | Brain WebSocket sync relay |
 | `cephalopod.httpUrl` | `http://localhost:7701` | Brain HTTP API (search, scope pulls) |
 | `cephalopod.space` | — | The space (graph) this window edits |
-| `cephalopod.token` | — | API token — prefer **Cephalopod: Set Token** (stored in SecretStorage) |
+
+The API token is **not** a setting — set it with the **Cephalopod: Set Token** command, which stores it in SecretStorage. (The deprecated `cephalopod.token` setting exists only so an old plaintext value is migrated into SecretStorage and cleared on activation.)
 
 ## Commands
 
