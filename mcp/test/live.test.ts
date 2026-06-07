@@ -31,10 +31,10 @@ beforeAll(async () => {
   store = new SqliteStore(":memory:");
   const auth = new Auth(store);
   const hub = new SpaceHub(store);
-  auth.bootstrapAdmin();
-  const agent = auth.createPrincipal("agent", "watcher");
-  const token = auth.issueToken(agent.id);
-  auth.setRole("eng", agent.id, "editor");
+  await auth.bootstrapAdmin();
+  const agent = await auth.createPrincipal("agent", "watcher");
+  const token = await auth.issueToken(agent.id);
+  await auth.setRole("eng", agent.id, "editor");
   store.setAgentMode("eng", "open"); // exercise resources/subscriptions, not draft-gating
 
   httpServer = createHttpServer(hub, auth);
@@ -43,11 +43,11 @@ beforeAll(async () => {
 
   // brain WS relay (same hub) — authenticate via ?token and enforce ACL
   wss = new WebSocketServer({ port: 0 });
-  wss.on("connection", (sock, req) => {
+  wss.on("connection", async (sock, req) => {
     const tok = new URL(req.url ?? "/", "http://x").searchParams.get("token") ?? undefined;
-    const p = auth.authenticate(tok);
+    const p = await auth.authenticate(tok);
     const cAuth: ConnAuth = p
-      ? { canRead: (s) => can(auth.roleOf(s, p.id), "read"), canWrite: (s) => can(auth.roleOf(s, p.id), "write") }
+      ? { canRead: async (s) => can(await auth.roleOf(s, p.id), "read"), canWrite: async (s) => can(await auth.roleOf(s, p.id), "write") }
       : { canRead: () => false, canWrite: () => false };
     const conn = hub.addConnection(wsConn<ServerMsg, ClientMsg>(sock), cAuth);
     sock.on("close", () => hub.removeConnection(conn));

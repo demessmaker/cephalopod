@@ -24,6 +24,7 @@ const toF32 = (v: unknown): Float32Array => {
 const likeTag = (t: string) => `%"${t}"%`;
 
 export class PgStore implements AsyncStore {
+  readonly __async = true as const;
   constructor(private db: PgClient) {}
   private q(sql: string, params: unknown[] = []) {
     return this.db.query(sql, params);

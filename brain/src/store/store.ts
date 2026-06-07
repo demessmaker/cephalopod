@@ -98,15 +98,20 @@ export interface Store {
 // async path is what a multi-tenant relay would adopt (see store/pg.ts).
 export type AsyncStore = {
   [K in keyof Store]: Store[K] extends (...args: infer A) => infer R ? (...args: A) => Promise<Awaited<R>> : never;
-};
+} & { readonly __async?: true };
 
 /** Lift a synchronous Store into an AsyncStore (for conformance tests / shims). */
 export function asyncify(s: Store): AsyncStore {
-  const out = {} as Record<string, unknown>;
+  const out = { __async: true } as Record<string, unknown>;
   for (const key of Object.getOwnPropertyNames(Object.getPrototypeOf(s))) {
     if (key === "constructor") continue;
     const fn = (s as unknown as Record<string, unknown>)[key];
     if (typeof fn === "function") out[key] = async (...args: unknown[]) => (fn as (...a: unknown[]) => unknown).apply(s, args);
   }
   return out as AsyncStore;
+}
+
+/** Normalize a sync or async store to AsyncStore (sync ones get lifted). */
+export function toAsync(s: Store | AsyncStore): AsyncStore {
+  return (s as AsyncStore).__async ? (s as AsyncStore) : asyncify(s as Store);
 }

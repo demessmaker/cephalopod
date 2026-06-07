@@ -93,14 +93,17 @@ with the role — they only narrow it. Implemented:
 **Track A (hardening) is complete.**
 
 ## Track C — Scale (SaaS)
-- **C1 Postgres store — ⏳ in progress.** An `AsyncStore` interface (async mirror
-  of `Store`) + `PgStore` (`store/pg.ts`) implement the full contract against
-  Postgres (native `tsvector` FTS; embeddings as `bytea` scored in JS — add the
-  `vector` extension + ANN index at scale). A backend-parity **conformance suite**
-  runs the same assertions against SQLite *and* Postgres (in-process **PGlite**),
-  both green. `asyncify()` lifts the sync store; `pgPool()` adapts production `pg`.
-  **Remaining:** make `SpaceHub`/`auth`/`http` async and select the backend at
-  startup — the larger, mechanical follow-on now that the storage layer is proven.
+- **C1 Postgres store — ✅ done, end-to-end.** `AsyncStore` (async mirror of
+  `Store`) + `PgStore` (`store/pg.ts`): full contract on Postgres (native
+  `tsvector` FTS; `bytea` embeddings scored in JS — add the `vector` extension +
+  ANN index at scale). `asyncify()` lifts the sync store; `pgPool()` adapts
+  production `pg`. **`SpaceHub`/`auth`/`http`/`server` are now async** and accept
+  either backend (a sync store is lifted via `toAsync`). Concurrency: WS messages
+  are serialized **per connection** (CRDT order), writes take a **per-doc lock**
+  (atomic apply→gate→rollback→commit), and `getDoc` is **load-guarded**.
+  **Verified:** a backend-parity conformance suite (SQLite + PGlite), plus a
+  Postgres-backed brain running the full HTTP stack (`pg-hub.test.ts`) and a live
+  async WS+HTTP server smoke. (159 tests across the repo.)
 - **C2 relay sharding** (NATS/Redis fan-out across instances) and **C3 real
   embedding model + pgvector/Qdrant** behind the `Embedder` seam — later.
 - **D — UX:** inline editing in the explorer (Yjs-in-browser + awareness/presence),

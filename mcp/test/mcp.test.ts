@@ -33,12 +33,12 @@ beforeAll(async () => {
   store = new SqliteStore(":memory:");
   const auth = new Auth(store);
   const hub = new SpaceHub(store);
-  const admin = auth.bootstrapAdmin()!;
+  const admin = (await auth.bootstrapAdmin())!;
   // an agent principal with editor rights in space "eng"
-  const agent = auth.createPrincipal("agent", "indexing-agent");
-  const agentToken = auth.issueToken(agent.id);
-  auth.setRole("eng", agent.id, "editor");
-  auth.setRole("eng", admin.principal.id, "admin");
+  const agent = await auth.createPrincipal("agent", "indexing-agent");
+  const agentToken = await auth.issueToken(agent.id);
+  await auth.setRole("eng", agent.id, "editor");
+  await auth.setRole("eng", admin.principal.id, "admin");
   store.setAgentMode("eng", "open"); // these tests exercise tools, not draft-gating
   httpServer = createHttpServer(hub, auth);
   await new Promise<void>((r) => httpServer.listen(0, r));

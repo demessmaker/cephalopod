@@ -33,20 +33,20 @@ beforeAll(async () => {
   const auth = new Auth(store);
   const hub = new SpaceHub(store);
   auth.bootstrapAdmin();
-  const dev = auth.createPrincipal("user", "dev");
-  const token = auth.issueToken(dev.id);
-  auth.setRole("eng", dev.id, "editor");
+  const dev = await auth.createPrincipal("user", "dev");
+  const token = await auth.issueToken(dev.id);
+  await auth.setRole("eng", dev.id, "editor");
 
   httpServer = createHttpServer(hub, auth);
   await new Promise<void>((r) => httpServer.listen(0, r));
   const httpPort = (httpServer.address() as any).port;
 
   wss = new WebSocketServer({ port: 0 });
-  wss.on("connection", (sock, req) => {
+  wss.on("connection", async (sock, req) => {
     const tok = tokenFromUpgrade(req); // header (arm) or ?token= fallback
-    const p = auth.authenticate(tok);
+    const p = await auth.authenticate(tok);
     const cAuth: ConnAuth = p
-      ? { canRead: (s) => can(auth.roleOf(s, p.id), "read"), canWrite: (s) => can(auth.roleOf(s, p.id), "write") }
+      ? { canRead: async (s) => can(await auth.roleOf(s, p.id), "read"), canWrite: async (s) => can(await auth.roleOf(s, p.id), "write") }
       : { canRead: () => false, canWrite: () => false };
     const conn = hub.addConnection(wsConn<ServerMsg, ClientMsg>(sock), cAuth);
     sock.on("close", () => hub.removeConnection(conn));

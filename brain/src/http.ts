@@ -1,6 +1,6 @@
 // HTTP Query/Command API (03 §2). Built on node:http with a tiny router; writes
 // funnel through the same hub path as WS deltas, so HTTP and live editors
-// converge. Every route is ACL-checked (05 §2).
+// converge. Every route is ACL-checked (05 §2). Async over the (async) hub/auth.
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import { Auth, can, type Action, type Capabilities } from "./auth.js";
 import type { SpaceHub } from "./hub.js";
@@ -22,7 +22,7 @@ interface Ctx {
   principal: Principal;
   caps: Capabilities;
 }
-type Handler = (c: Ctx) => void;
+type Handler = (c: Ctx) => unknown | Promise<unknown>;
 interface Route {
   method: string;
   re: RegExp;
@@ -32,20 +32,15 @@ interface Route {
 
 function compile(method: string, path: string, handler: Handler): Route {
   const keys: string[] = [];
-  const re = new RegExp(
-    "^" + path.replace(/:([A-Za-z]+)/g, (_, k) => (keys.push(k), "([^/]+)")) + "/?$",
-  );
+  const re = new RegExp("^" + path.replace(/:([A-Za-z]+)/g, (_, k) => (keys.push(k), "([^/]+)")) + "/?$");
   return { method, re, keys, handler };
 }
 
 const json = (res: ServerResponse, code: number, body: unknown) => {
-  const s = JSON.stringify(body);
   res.writeHead(code, { "content-type": "application/json" });
-  res.end(s);
+  res.end(JSON.stringify(body));
 };
 const err = (res: ServerResponse, code: number, msg: string) => json(res, code, { error: msg });
-// Parse a query int with a default; clamp to [min,max] and reject NaN/negatives/huge.
-// An absent (null) or empty param uses the default — note Number(null)/Number("") is 0.
 const intParam = (v: string | null, def: number, min: number, max: number): number => {
   if (v === null || v === "") return def;
   const n = Number(v);
@@ -58,8 +53,8 @@ export function createHttpServer(hub: SpaceHub, auth: Auth, opts: HttpOptions = 
   const limiter = opts.rateLimit ? new RateLimiter(opts.rateLimit.capacity, opts.rateLimit.refillPerSec) : undefined;
 
   // require a space role >= action; also enforces a read-only token capability
-  const require = (c: Ctx, action: Action): boolean => {
-    const role = auth.roleOf(c.params.space, c.principal.id);
+  const require = async (c: Ctx, action: Action): Promise<boolean> => {
+    const role = await auth.roleOf(c.params.space, c.principal.id);
     if (!can(role, action)) {
       err(c.res, 403, `forbidden: need ${action} on ${c.params.space}`);
       return false;
@@ -86,9 +81,7 @@ export function createHttpServer(hub: SpaceHub, auth: Auth, opts: HttpOptions = 
   };
   const parseCaps = (v: any): Capabilities => (v && typeof v === "object" ? v : {});
 
-  // Minting principals/tokens must not let a capability-restricted token escalate
-  // itself (read-only/scoped -> full) — caps may only ever narrow (05 §2.2). Only
-  // an unconstrained token may mint; a scoped one is refused.
+  // Minting must not let a capability-restricted token escalate itself (05 §2.2).
   const canMint = (c: Ctx): boolean => {
     const cp = c.caps;
     if (cp.mode === "read" || cp.writeTags?.length || cp.pathPrefix) {
@@ -99,83 +92,81 @@ export function createHttpServer(hub: SpaceHub, auth: Auth, opts: HttpOptions = 
   };
 
   // --- principals, tokens & spaces ---
-  route("POST", "/principals", (c) => {
+  route("POST", "/principals", async (c) => {
     if (!canMint(c)) return;
     const kind = c.body?.kind === "agent" ? "agent" : "user";
-    const p = auth.createPrincipal(kind, String(c.body?.name ?? kind));
+    const p = await auth.createPrincipal(kind, String(c.body?.name ?? kind));
     const caps = parseCaps(c.body?.capabilities);
-    json(c.res, 201, { principal: p, token: auth.issueToken(p.id, caps), capabilities: caps });
+    json(c.res, 201, { principal: p, token: await auth.issueToken(p.id, caps), capabilities: caps });
   });
 
-  // mint an additional (optionally scoped) token for an existing principal
-  route("POST", "/tokens", (c) => {
+  route("POST", "/tokens", async (c) => {
     if (!canMint(c)) return;
     const principalId = c.body?.principalId;
-    if (!principalId || !auth.getPrincipalById(principalId)) return err(c.res, 400, "valid principalId required");
+    if (!principalId || !(await auth.getPrincipalById(principalId))) return err(c.res, 400, "valid principalId required");
     const caps = parseCaps(c.body?.capabilities);
-    json(c.res, 201, { token: auth.issueToken(principalId, caps), capabilities: caps });
+    json(c.res, 201, { token: await auth.issueToken(principalId, caps), capabilities: caps });
   });
 
-  route("GET", "/spaces", (c) => json(c.res, 200, { spaces: auth.memberships(c.principal.id) }));
+  route("GET", "/spaces", async (c) => json(c.res, 200, { spaces: await auth.memberships(c.principal.id) }));
 
-  route("POST", "/spaces", (c) => {
+  route("POST", "/spaces", async (c) => {
     const name = String(c.body?.name ?? "").trim();
     if (!name) return err(c.res, 400, "name required");
-    auth.setRole(name, c.principal.id, "admin"); // creator becomes admin
+    await auth.setRole(name, c.principal.id, "admin"); // creator becomes admin
     json(c.res, 201, { space: name, role: "admin" });
   });
 
-  route("POST", "/spaces/:space/members", (c) => {
-    if (!require(c, "admin")) return;
+  route("POST", "/spaces/:space/members", async (c) => {
+    if (!(await require(c, "admin"))) return;
     const { principalId, role } = c.body ?? {};
     if (!principalId || !["viewer", "editor", "admin"].includes(role)) return err(c.res, 400, "principalId + role required");
-    auth.setRole(c.params.space, principalId, role as Role);
+    await auth.setRole(c.params.space, principalId, role as Role);
     json(c.res, 200, { ok: true });
   });
 
   // per-space settings: agent write policy (05 §4) + required facets
-  const settingsOf = (space: string) => ({
-    agentMode: hub.getAgentMode(space),
-    requiredFacets: hub.getRequiredFacets(space),
-    maxNotes: hub.getMaxNotes(space),
-    secretScan: hub.getSecretScan(space),
+  const settingsOf = async (space: string) => ({
+    agentMode: await hub.getAgentMode(space),
+    requiredFacets: await hub.getRequiredFacets(space),
+    maxNotes: await hub.getMaxNotes(space),
+    secretScan: await hub.getSecretScan(space),
   });
-  route("GET", "/spaces/:space/settings", (c) => {
-    if (!require(c, "read")) return;
-    json(c.res, 200, settingsOf(c.params.space));
+  route("GET", "/spaces/:space/settings", async (c) => {
+    if (!(await require(c, "read"))) return;
+    json(c.res, 200, await settingsOf(c.params.space));
   });
-  route("PUT", "/spaces/:space/settings", (c) => {
-    if (!require(c, "admin")) return;
+  route("PUT", "/spaces/:space/settings", async (c) => {
+    if (!(await require(c, "admin"))) return;
     const { agentMode, requiredFacets, maxNotes } = c.body ?? {};
     if (agentMode !== undefined) {
       if (agentMode !== "draft" && agentMode !== "open") return err(c.res, 400, "agentMode must be draft|open");
-      hub.setAgentMode(c.params.space, agentMode);
+      await hub.setAgentMode(c.params.space, agentMode);
     }
     if (requiredFacets !== undefined) {
       if (!Array.isArray(requiredFacets) || requiredFacets.some((f) => typeof f !== "string"))
         return err(c.res, 400, "requiredFacets must be a string[]");
-      hub.setRequiredFacets(c.params.space, requiredFacets);
+      await hub.setRequiredFacets(c.params.space, requiredFacets);
     }
     if (maxNotes !== undefined) {
       if (typeof maxNotes !== "number" || maxNotes < 0) return err(c.res, 400, "maxNotes must be a non-negative number");
-      hub.setMaxNotes(c.params.space, maxNotes);
+      await hub.setMaxNotes(c.params.space, maxNotes);
     }
     if (c.body?.secretScan !== undefined) {
       if (!["off", "warn", "block"].includes(c.body.secretScan)) return err(c.res, 400, "secretScan must be off|warn|block");
-      hub.setSecretScan(c.params.space, c.body.secretScan);
+      await hub.setSecretScan(c.params.space, c.body.secretScan);
     }
-    json(c.res, 200, settingsOf(c.params.space));
+    json(c.res, 200, await settingsOf(c.params.space));
   });
 
-  // Draft-gate (05 §4): agent writes are provenance-stamped and, when the space
-  // is in "draft" mode, forced to #draft; agents may only touch their own drafts.
+  // Draft-gate (05 §4): agent writes are provenance-stamped and, in "draft" mode,
+  // forced to #draft; agents may only touch their own drafts.
   const DRAFT = "draft";
-  const gated = (c: Ctx) => c.principal.kind === "agent" && hub.getAgentMode(c.params.space) === "draft";
+  const gated = async (c: Ctx) => c.principal.kind === "agent" && (await hub.getAgentMode(c.params.space)) === "draft";
   const stamp = (kind: string) => (kind === "agent" ? "agent" : "human");
 
-  // per-space required facets (e.g. client/project), with a #shared exemption
-  const facetError = (c: Ctx, tags: string[]): boolean => {
-    const miss = hub.missingFacets(c.params.space, tags);
+  const facetError = async (c: Ctx, tags: string[]): Promise<boolean> => {
+    const miss = await hub.missingFacets(c.params.space, tags);
     if (miss.length) {
       err(c.res, 422, `missing required facets: ${miss.join(", ")} — add tags like client:acme, or tag "shared" to exempt`);
       return true;
@@ -185,166 +176,157 @@ export function createHttpServer(hub: SpaceHub, auth: Auth, opts: HttpOptions = 
   const tagFilters = (c: Ctx) => c.url.searchParams.getAll("tag");
   const SECRET = "secret-suspected";
 
-  // Scan text for secrets per the space policy. Returns the tags to merge (warn)
-  // or sends a 422 and returns null (block). [] = clean / off.
-  const secretGate = (c: Ctx, text: string, tags: string[]): string[] | null => {
+  const secretGate = async (c: Ctx, text: string, tags: string[]): Promise<string[] | null> => {
     const found = scanSecrets(text);
     if (!found.length) return tags;
-    const policy = hub.getSecretScan(c.params.space);
+    const policy = await hub.getSecretScan(c.params.space);
     if (policy === "off") return tags;
     if (policy === "block") {
       json(c.res, 422, { error: "possible secret detected", code: "secret_suspected", patterns: found });
       return null;
     }
-    return [...new Set([...tags, SECRET])]; // warn: tag it, let it through (hidden if also #draft)
+    return [...new Set([...tags, SECRET])];
   };
 
   // --- notes ---
-  route("POST", "/spaces/:space/notes", (c) => {
-    if (!require(c, "write")) return;
+  route("POST", "/spaces/:space/notes", async (c) => {
+    if (!(await require(c, "write"))) return;
     const fields = { ...(c.body ?? {}) };
     fields.props = { ...(fields.props ?? {}), authoredBy: stamp(c.principal.kind) };
-    if (gated(c)) fields.tags = [...new Set([...(fields.tags ?? []), DRAFT])];
-    const scanned = secretGate(c, `${fields.title ?? ""}\n${fields.body ?? ""}\n${JSON.stringify(fields.props ?? {})}`, fields.tags ?? []);
-    if (scanned === null) return; // blocked
+    const isGated = await gated(c);
+    if (isGated) fields.tags = [...new Set([...(fields.tags ?? []), DRAFT])];
+    const scanned = await secretGate(c, `${fields.title ?? ""}\n${fields.body ?? ""}\n${JSON.stringify(fields.props ?? {})}`, fields.tags ?? []);
+    if (scanned === null) return;
     fields.tags = scanned;
     if (!inScope(c, fields.tags ?? [], fields.props?.path)) return;
-    if (facetError(c, fields.tags ?? [])) return;
-    if (!hub.hasNote(c.params.space, c.body?.id ?? "") && hub.quotaExceeded(c.params.space)) {
+    if (await facetError(c, fields.tags ?? [])) return;
+    if (!(await hub.hasNote(c.params.space, c.body?.id ?? "")) && (await hub.quotaExceeded(c.params.space))) {
       c.res.writeHead(429, { "content-type": "application/json" });
       return c.res.end(JSON.stringify({ error: "space note quota reached", code: "quota_exceeded" }));
     }
-    const id = hub.createNote(c.params.space, fields, c.body?.id, c.principal.id);
-    json(c.res, 201, { id, draft: gated(c) });
+    const id = await hub.createNote(c.params.space, fields, c.body?.id, c.principal.id);
+    json(c.res, 201, { id, draft: isGated });
   });
-  route("GET", "/spaces/:space/notes", (c) => {
-    if (!require(c, "read")) return;
+  route("GET", "/spaces/:space/notes", async (c) => {
+    if (!(await require(c, "read"))) return;
     const drafts = c.url.searchParams.get("drafts") === "1";
-    json(c.res, 200, { notes: hub.listNotes(c.params.space, intParam(c.url.searchParams.get("limit"), 50, 1, 500), drafts, tagFilters(c)) });
+    json(c.res, 200, { notes: await hub.listNotes(c.params.space, intParam(c.url.searchParams.get("limit"), 50, 1, 500), drafts, tagFilters(c)) });
   });
-  route("GET", "/spaces/:space/notes/:id", (c) => {
-    if (!require(c, "read")) return;
-    if (!hub.hasNote(c.params.space, c.params.id)) return err(c.res, 404, "not found");
-    json(c.res, 200, hub.getNoteSnapshot(c.params.space, c.params.id));
+  route("GET", "/spaces/:space/notes/:id", async (c) => {
+    if (!(await require(c, "read"))) return;
+    if (!(await hub.hasNote(c.params.space, c.params.id))) return err(c.res, 404, "not found");
+    json(c.res, 200, await hub.getNoteSnapshot(c.params.space, c.params.id));
   });
-  route("PATCH", "/spaces/:space/notes/:id", (c) => {
-    if (!require(c, "write")) return;
-    if (!hub.hasNote(c.params.space, c.params.id)) return err(c.res, 404, "not found");
+  route("PATCH", "/spaces/:space/notes/:id", async (c) => {
+    if (!(await require(c, "write"))) return;
+    if (!(await hub.hasNote(c.params.space, c.params.id))) return err(c.res, 404, "not found");
     const patch = { ...(c.body ?? {}) };
-    const cur0 = hub.getNoteSnapshot(c.params.space, c.params.id);
+    const cur0 = await hub.getNoteSnapshot(c.params.space, c.params.id);
     if (patch.title !== undefined || patch.body !== undefined || patch.props !== undefined) {
-      const scanned = secretGate(c, `${patch.title ?? ""}\n${patch.body ?? ""}\n${patch.props ? JSON.stringify(patch.props) : ""}`, patch.tags ?? cur0.tags);
-      if (scanned === null) return; // blocked
+      const scanned = await secretGate(c, `${patch.title ?? ""}\n${patch.body ?? ""}\n${patch.props ? JSON.stringify(patch.props) : ""}`, patch.tags ?? cur0.tags);
+      if (scanned === null) return;
       if (scanned.includes(SECRET)) patch.tags = scanned;
     }
     if (!inScope(c, patch.tags ?? cur0.tags, (patch.props?.path ?? cur0.props.path) as string)) return;
-    if (gated(c)) {
+    if (await gated(c)) {
       if (!cur0.tags.includes(DRAFT)) return err(c.res, 403, "agents may only edit #draft notes");
-      if (patch.tags && !patch.tags.includes(DRAFT)) patch.tags = [...patch.tags, DRAFT]; // can't self-promote
+      if (patch.tags && !patch.tags.includes(DRAFT)) patch.tags = [...patch.tags, DRAFT];
       patch.props = { ...(patch.props ?? {}), authoredBy: "agent" };
     }
-    if (patch.tags !== undefined && facetError(c, patch.tags)) return; // enforce on explicit tag changes
-    hub.patchNote(c.params.space, c.params.id, patch, c.principal.id);
-    json(c.res, 200, hub.getNoteSnapshot(c.params.space, c.params.id));
+    if (patch.tags !== undefined && (await facetError(c, patch.tags))) return;
+    await hub.patchNote(c.params.space, c.params.id, patch, c.principal.id);
+    json(c.res, 200, await hub.getNoteSnapshot(c.params.space, c.params.id));
   });
-  route("POST", "/spaces/:space/notes/:id/promote", (c) => {
-    if (!require(c, "write")) return;
+  route("POST", "/spaces/:space/notes/:id/promote", async (c) => {
+    if (!(await require(c, "write"))) return;
     if (c.principal.kind === "agent") return err(c.res, 403, "agents cannot promote drafts");
-    if (!hub.hasNote(c.params.space, c.params.id)) return err(c.res, 404, "not found");
-    const cur = hub.getNoteSnapshot(c.params.space, c.params.id);
-    hub.patchNote(c.params.space, c.params.id, { tags: cur.tags.filter((t) => t !== DRAFT) }, c.principal.id);
-    json(c.res, 200, hub.getNoteSnapshot(c.params.space, c.params.id));
+    if (!(await hub.hasNote(c.params.space, c.params.id))) return err(c.res, 404, "not found");
+    const cur = await hub.getNoteSnapshot(c.params.space, c.params.id);
+    await hub.patchNote(c.params.space, c.params.id, { tags: cur.tags.filter((t) => t !== DRAFT) }, c.principal.id);
+    json(c.res, 200, await hub.getNoteSnapshot(c.params.space, c.params.id));
   });
-  route("DELETE", "/spaces/:space/notes/:id", (c) => {
-    if (!require(c, "write")) return;
-    if (!hub.hasNote(c.params.space, c.params.id)) return err(c.res, 404, "not found");
-    const cur = hub.getNoteSnapshot(c.params.space, c.params.id);
+  route("DELETE", "/spaces/:space/notes/:id", async (c) => {
+    if (!(await require(c, "write"))) return;
+    if (!(await hub.hasNote(c.params.space, c.params.id))) return err(c.res, 404, "not found");
+    const cur = await hub.getNoteSnapshot(c.params.space, c.params.id);
     if (!inScope(c, cur.tags, cur.props.path as string)) return;
-    hub.deleteNote(c.params.space, c.params.id, c.principal.id);
+    await hub.deleteNote(c.params.space, c.params.id, c.principal.id);
     json(c.res, 200, { ok: true });
   });
-  // hard purge (05 §5): destructive, admin-only, audited — expunge all traces
-  route("POST", "/spaces/:space/notes/:id/purge", (c) => {
-    if (!require(c, "admin")) return;
+  route("POST", "/spaces/:space/notes/:id/purge", async (c) => {
+    if (!(await require(c, "admin"))) return;
     console.error(`[audit] purge ${c.params.space}/${c.params.id} by ${c.principal.id} at ${new Date().toISOString()}`);
-    hub.purgeNote(c.params.space, c.params.id);
+    await hub.purgeNote(c.params.space, c.params.id);
     json(c.res, 200, { ok: true, purged: c.params.id });
   });
 
-  // reversibility (05 §4): admin undoes a principal's edits since a time
-  route("POST", "/spaces/:space/revert", (c) => {
-    if (!require(c, "admin")) return;
+  route("POST", "/spaces/:space/revert", async (c) => {
+    if (!(await require(c, "admin"))) return;
     const { principalId, since } = c.body ?? {};
     if (!principalId) return err(c.res, 400, "principalId required");
-    // `since` is required: defaulting it to 0 would silently revert the actor's
-    // ENTIRE history (every edit has ts >= 0) — a destructive op must be explicit.
-    if (since === undefined || since === null || since === "") {
-      return err(c.res, 400, "since required (epoch ms or ISO timestamp)");
-    }
+    if (since === undefined || since === null || since === "") return err(c.res, 400, "since required (epoch ms or ISO timestamp)");
     const sinceTs = typeof since === "number" ? since : Date.parse(since);
     if (Number.isNaN(sinceTs)) return err(c.res, 400, "since must be epoch ms or an ISO timestamp");
     console.error(`[audit] revert ${c.params.space} actor=${principalId} since=${new Date(sinceTs).toISOString()} by ${c.principal.id}`);
-    // `reverted`: notes changed; `partial`: notes only best-effort reverted because
-    // some of the actor's edits were already compacted into a snapshot.
-    json(c.res, 200, hub.revertActor(c.params.space, principalId, sinceTs));
+    json(c.res, 200, await hub.revertActor(c.params.space, principalId, sinceTs));
   });
 
   // --- links & traversal --- (a link mutates `from`, so scope-check `from`)
-  const linkScoped = (c: Ctx, from: string): boolean => {
-    if (!hub.hasNote(c.params.space, from)) return true; // new stub source — allow
-    const cur = hub.getNoteSnapshot(c.params.space, from);
+  const linkScoped = async (c: Ctx, from: string): Promise<boolean> => {
+    if (!(await hub.hasNote(c.params.space, from))) return true; // new stub source — allow
+    const cur = await hub.getNoteSnapshot(c.params.space, from);
     return inScope(c, cur.tags, cur.props.path as string);
   };
-  route("POST", "/spaces/:space/links", (c) => {
-    if (!require(c, "write")) return;
+  route("POST", "/spaces/:space/links", async (c) => {
+    if (!(await require(c, "write"))) return;
     const { from, to, type } = c.body ?? {};
     if (!from || !to) return err(c.res, 400, "from + to required");
-    if (!linkScoped(c, from)) return;
-    hub.linkNote(c.params.space, from, to, type ?? null, c.principal.id);
+    if (!(await linkScoped(c, from))) return;
+    await hub.linkNote(c.params.space, from, to, type ?? null, c.principal.id);
     json(c.res, 201, { ok: true });
   });
-  route("POST", "/spaces/:space/unlink", (c) => {
-    if (!require(c, "write")) return;
+  route("POST", "/spaces/:space/unlink", async (c) => {
+    if (!(await require(c, "write"))) return;
     const { from, to, type } = c.body ?? {};
     if (!from || !to) return err(c.res, 400, "from + to required");
-    if (!linkScoped(c, from)) return;
-    hub.unlinkNote(c.params.space, from, to, type ?? null, c.principal.id);
+    if (!(await linkScoped(c, from))) return;
+    await hub.unlinkNote(c.params.space, from, to, type ?? null, c.principal.id);
     json(c.res, 200, { ok: true });
   });
-  route("GET", "/spaces/:space/notes/:id/neighbors", (c) => {
-    if (!require(c, "read")) return;
+  route("GET", "/spaces/:space/notes/:id/neighbors", async (c) => {
+    if (!(await require(c, "read"))) return;
     const hops = intParam(c.url.searchParams.get("hops"), 1, 0, 6);
     const dir = (c.url.searchParams.get("dir") ?? "both") as "out" | "in" | "both";
-    json(c.res, 200, hub.neighbors(c.params.space, c.params.id, hops, dir));
+    json(c.res, 200, await hub.neighbors(c.params.space, c.params.id, hops, dir));
   });
-  route("GET", "/spaces/:space/notes/:id/backlinks", (c) => {
-    if (!require(c, "read")) return;
-    json(c.res, 200, hub.backlinks(c.params.space, c.params.id));
+  route("GET", "/spaces/:space/notes/:id/backlinks", async (c) => {
+    if (!(await require(c, "read"))) return;
+    json(c.res, 200, await hub.backlinks(c.params.space, c.params.id));
   });
 
   // --- search, tags, query ---
-  route("GET", "/spaces/:space/search", (c) => {
-    if (!require(c, "read")) return;
+  route("GET", "/spaces/:space/search", async (c) => {
+    if (!(await require(c, "read"))) return;
     const q = c.url.searchParams.get("q") ?? "";
     const limit = intParam(c.url.searchParams.get("limit"), 20, 1, 200);
     const drafts = c.url.searchParams.get("drafts") === "1";
     const mode = (c.url.searchParams.get("mode") ?? "text") as "text" | "semantic" | "hybrid";
-    json(c.res, 200, { hits: q ? hub.searchMode(c.params.space, q, mode, limit, drafts, tagFilters(c)) : [] });
+    json(c.res, 200, { hits: q ? await hub.searchMode(c.params.space, q, mode, limit, drafts, tagFilters(c)) : [] });
   });
-  route("GET", "/spaces/:space/tags", (c) => {
-    if (!require(c, "read")) return;
-    json(c.res, 200, { tags: hub.tagCounts(c.params.space) });
+  route("GET", "/spaces/:space/tags", async (c) => {
+    if (!(await require(c, "read"))) return;
+    json(c.res, 200, { tags: await hub.tagCounts(c.params.space) });
   });
-  route("POST", "/spaces/:space/query", (c) => {
-    if (!require(c, "read")) return;
+  route("POST", "/spaces/:space/query", async (c) => {
+    if (!(await require(c, "read"))) return;
     const m = c.body?.match ?? {};
     const tr = c.body?.traverse;
-    if (tr?.from) return json(c.res, 200, hub.neighbors(c.params.space, tr.from, tr.hops ?? 1, tr.dir ?? "both"));
+    if (tr?.from) return json(c.res, 200, await hub.neighbors(c.params.space, tr.from, tr.hops ?? 1, tr.dir ?? "both"));
     const limit = c.body?.limit ?? 20;
     const drafts = !!c.body?.includeDrafts;
     const tags: string[] = Array.isArray(m.tags) ? m.tags : [];
-    if (m.semantic) return json(c.res, 200, { hits: hub.searchHybrid(c.params.space, m.semantic, limit, drafts, tags) });
-    if (m.text) return json(c.res, 200, { hits: hub.search(c.params.space, m.text, limit, drafts, tags) });
+    if (m.semantic) return json(c.res, 200, { hits: await hub.searchHybrid(c.params.space, m.semantic, limit, drafts, tags) });
+    if (m.text) return json(c.res, 200, { hits: await hub.search(c.params.space, m.text, limit, drafts, tags) });
     err(c.res, 400, "query needs match.text, match.semantic, or traverse.from");
   });
 
@@ -359,15 +341,6 @@ export function createHttpServer(hub: SpaceHub, auth: Auth, opts: HttpOptions = 
       return res.end(JSON.stringify({ status: "ok" }));
     }
 
-    const token = req.headers.authorization?.replace(/^Bearer\s+/i, "");
-    const principal = auth.authenticate(token);
-    if (!principal) return err(res, 401, "unauthorized");
-    if (limiter && !limiter.allow(token!)) {
-      res.writeHead(429, { "content-type": "application/json", "retry-after": "1" });
-      return res.end(JSON.stringify({ error: "rate limited", code: "rate_limited" }));
-    }
-    const caps = auth.capabilities(token);
-
     let raw = "";
     let aborted = false;
     req.on("data", (d) => {
@@ -380,8 +353,17 @@ export function createHttpServer(hub: SpaceHub, auth: Auth, opts: HttpOptions = 
         req.destroy();
       }
     });
-    req.on("end", () => {
+    req.on("end", async () => {
       if (aborted) return;
+      const token = req.headers.authorization?.replace(/^Bearer\s+/i, "");
+      const principal = await auth.authenticate(token);
+      if (!principal) return err(res, 401, "unauthorized");
+      if (limiter && !limiter.allow(token!)) {
+        res.writeHead(429, { "content-type": "application/json", "retry-after": "1" });
+        return res.end(JSON.stringify({ error: "rate limited", code: "rate_limited" }));
+      }
+      const caps = await auth.capabilities(token);
+
       let body: any = undefined;
       if (raw) {
         try {
@@ -401,9 +383,10 @@ export function createHttpServer(hub: SpaceHub, auth: Auth, opts: HttpOptions = 
           return err(res, 400, "malformed percent-encoding in path");
         }
         try {
-          return r.handler({ req, res, url, params, body, principal, caps });
+          return await r.handler({ req, res, url, params, body, principal, caps });
         } catch (e) {
-          return err(res, 500, (e as Error).message);
+          if (!res.headersSent) return err(res, 500, (e as Error).message);
+          return;
         }
       }
       err(res, 404, "no route");

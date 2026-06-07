@@ -29,8 +29,8 @@ describe("M1 brain — persistence", () => {
       const hub = new SpaceHub(store, { snapshotEvery: 1000 }); // force pure-log path
       const c = new TestClient();
       hub.addConnection(c.conn);
-      c.applyNote("sp", "n_1", makeNote("n_1", { title: "Alpha", body: "see [[Beta]]" }));
-      expect(hub.docState("sp", "n_1").getText("body").toString()).toBe("see [[Beta]]");
+      await c.applyNote("sp", "n_1", makeNote("n_1", { title: "Alpha", body: "see [[Beta]]" }));
+      expect((await hub.docState("sp", "n_1")).getText("body").toString()).toBe("see [[Beta]]");
       store.close();
     }
     // --- session 2: fresh process on the same db file ---
@@ -43,13 +43,13 @@ describe("M1 brain — persistence", () => {
       const scope = await c.query("sp", { note: "n_1", kind: "neighbors", hops: 1 });
       expect(scope.edges).toContainEqual({ from: "n_1", to: stubId("Beta"), type: null, origin: "wikilink" });
       // doc body rehydrates from the log:
-      c.open("sp", "n_1");
-      expect(hub.docState("sp", "n_1").getText("body").toString()).toBe("see [[Beta]]");
+      await c.open("sp", "n_1");
+      expect((await hub.docState("sp", "n_1")).getText("body").toString()).toBe("see [[Beta]]");
       store.close();
     }
   });
 
-  it("snapshots compact the log and still rehydrate", () => {
+  it("snapshots compact the log and still rehydrate", async () => {
     const db = tmpDb();
     {
       const store = new SqliteStore(db);
@@ -64,6 +64,7 @@ describe("M1 brain — persistence", () => {
       ln.h.body.insert(3, "d");       // u4
       c.send({ t: "open", space: "sp", note: "n_x" });
       for (const u of ln.updates) c.send({ t: "update", space: "sp", note: "n_x", update: b64.enc(u) });
+      await c.drain("sp");
       // a snapshot exists and the log tail is compacted to the post-snapshot updates
       const loaded = store.loadDoc("sp", "n_x");
       expect(loaded.snapshot).toBeDefined();
@@ -75,8 +76,8 @@ describe("M1 brain — persistence", () => {
       const hub = new SpaceHub(store);
       const c = new TestClient();
       hub.addConnection(c.conn);
-      c.open("sp", "n_x");
-      expect(hub.docState("sp", "n_x").getText("body").toString()).toBe("abcd");
+      await c.open("sp", "n_x");
+      expect((await hub.docState("sp", "n_x")).getText("body").toString()).toBe("abcd");
       store.close();
     }
   });
@@ -86,8 +87,8 @@ describe("M1 brain — persistence", () => {
     const hub = new SpaceHub(store);
     const c = new TestClient();
     hub.addConnection(c.conn);
-    c.applyNote("teamA", "n_1", makeNote("n_1", { title: "A-title" }));
-    c.applyNote("teamB", "n_1", makeNote("n_1", { title: "B-title" }));
+    await c.applyNote("teamA", "n_1", makeNote("n_1", { title: "A-title" }));
+    await c.applyNote("teamB", "n_1", makeNote("n_1", { title: "B-title" }));
     const a = await c.query("teamA", { note: "n_1", kind: "neighbors", hops: 1 });
     const b = await c.query("teamB", { note: "n_1", kind: "neighbors", hops: 1 });
     expect(a.nodes.find((n) => n.id === "n_1")?.title).toBe("A-title");

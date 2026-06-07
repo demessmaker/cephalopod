@@ -25,7 +25,7 @@ beforeAll(async () => {
   store = new SqliteStore(":memory:");
   const auth = new Auth(store);
   const hub = new SpaceHub(store);
-  adminToken = auth.bootstrapAdmin()!.token;
+  adminToken = (await auth.bootstrapAdmin())!.token;
 
   httpServer = createHttpServer(hub, auth);
   await new Promise<void>((r) => httpServer.listen(0, r));
@@ -33,14 +33,14 @@ beforeAll(async () => {
 
   // WS wiring mirrors src/server.ts: thread capabilities into ConnAuth.
   wss = new WebSocketServer({ port: 0 });
-  wss.on("connection", (sock, req) => {
+  wss.on("connection", async (sock, req) => {
     const tok = new URL(req.url ?? "/", "http://x").searchParams.get("token") ?? undefined;
-    const p = auth.authenticate(tok);
-    const caps = auth.capabilities(tok);
+    const p = await auth.authenticate(tok);
+    const caps = await auth.capabilities(tok);
     const cAuth: ConnAuth = p
       ? {
-          canRead: (s) => can(auth.roleOf(s, p.id), "read"),
-          canWrite: (s) => can(auth.roleOf(s, p.id), "write") && caps.mode !== "read",
+          canRead: async (s) => can(await auth.roleOf(s, p.id), "read"),
+          canWrite: async (s) => can(await auth.roleOf(s, p.id), "write") && caps.mode !== "read",
           kind: p.kind,
           principalId: p.id,
           caps,
@@ -71,7 +71,7 @@ async function setup(space: string, caps: Capabilities = {}, settings?: Record<s
   const auth = new Auth(store);
   await http("POST", "/spaces", adminToken, { name: space });
   if (settings) await http("PUT", `/spaces/${space}/settings`, adminToken, settings);
-  const user = auth.createPrincipal("user", `u-${space}`);
+  const user = await auth.createPrincipal("user", `u-${space}`);
   await http("POST", `/spaces/${space}/members`, adminToken, { principalId: user.id, role: "editor" });
   return auth.issueToken(user.id, caps);
 }
