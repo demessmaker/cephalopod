@@ -6,9 +6,11 @@
   "description": "Phase-4 web graph explorer (north-star UI) — build-less vanilla ES modules.",
   "scripts": {
     "start": "node src/serve.mjs",
+    "vendor": "node scripts/vendor.mjs",
     "test": "vitest run"
   },
   "devDependencies": {
+    "esbuild": "^0.21.5",
     "vitest": "^2.1.8",
     "y-protocols": "1.0.7",
     "yjs": "13.6.31"

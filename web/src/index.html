@@ -5,15 +5,17 @@
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>🐙 Cephalopod Explorer</title>
     <link rel="stylesheet" href="styles.css" />
-    <!-- build-less: pull Yjs + awareness from a CDN at runtime. Versions are pinned
-         to exact, immutable esm.sh builds that MATCH web/package.json, so the unit
-         tests exercise the same bytecode production ships. (Hardening follow-up:
-         vendor these same-origin for SRI/offline.) -->
+    <!-- build-less, but vendored SAME-ORIGIN (no third-party CDN, no SRI gap): Yjs +
+         awareness are committed under src/vendor/ and served by our own static
+         server. Regenerate after a version bump with `npm run vendor` (the pins in
+         web/package.json are the source of truth; tests resolve the same bytecode
+         from node_modules). awareness's internal `import "yjs"` resolves through this
+         same map to the ONE vendored Yjs. -->
     <script type="importmap">
       {
         "imports": {
-          "yjs": "https://esm.sh/yjs@13.6.31",
-          "y-protocols/awareness": "https://esm.sh/y-protocols@1.0.7/awareness"
+          "yjs": "/vendor/yjs.js",
+          "y-protocols/awareness": "/vendor/y-protocols-awareness.js"
         }
       }
     </script>
