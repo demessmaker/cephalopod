@@ -85,13 +85,24 @@ with the role — they only narrow it. Implemented:
   `protocol` live in `/core`; `brain` and `arm` re-export them via thin
   `src/core/*` shims (call sites unchanged). Surfaced + fixed a latent null-byte
   in the `docKey` separator. (`spike` keeps its frozen M0 copy.)
-- **Migration runner** — replace the ad-hoc guarded `ALTER` with ordered, recorded
-  migrations (matters as the schema keeps evolving here). ‹next›
+- **Migration runner** — ✅ done: `brain/src/store/migrations.ts` runs ordered,
+  recorded migrations (`schema_migrations` table); v1 is the consolidated,
+  idempotent baseline that also upgrades legacy DBs. The constructor's ad-hoc
+  guarded `ALTER`s are gone; future schema changes append a numbered migration.
 
-## Deferred tracks (revisit if direction shifts)
-- **C — Scale (SaaS):** Postgres `Store`, relay sharding (NATS/Redis fan-out),
-  real embedding model + pgvector/Qdrant behind the `Embedder` seam. Only needed
-  for multi-tenant or ≫250k-note spaces.
+**Track A (hardening) is complete.**
+
+## Track C — Scale (SaaS)
+- **C1 Postgres store — ⏳ in progress.** An `AsyncStore` interface (async mirror
+  of `Store`) + `PgStore` (`store/pg.ts`) implement the full contract against
+  Postgres (native `tsvector` FTS; embeddings as `bytea` scored in JS — add the
+  `vector` extension + ANN index at scale). A backend-parity **conformance suite**
+  runs the same assertions against SQLite *and* Postgres (in-process **PGlite**),
+  both green. `asyncify()` lifts the sync store; `pgPool()` adapts production `pg`.
+  **Remaining:** make `SpaceHub`/`auth`/`http` async and select the backend at
+  startup — the larger, mechanical follow-on now that the storage layer is proven.
+- **C2 relay sharding** (NATS/Redis fan-out across instances) and **C3 real
+  embedding model + pgvector/Qdrant** behind the `Embedder` seam — later.
 - **D — UX:** inline editing in the explorer (Yjs-in-browser + awareness/presence),
   attachments/blob store, bidirectional Obsidian sync, VS Code plugin, Rust arm.
 - **E — Ops:** full-stack `docker-compose` (brain + web), metrics/tracing,
