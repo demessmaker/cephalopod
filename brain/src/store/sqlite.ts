@@ -331,6 +331,9 @@ export class SqliteStore implements Store {
   deleteBlob(space: string, hash: string): void {
     this.db.prepare("DELETE FROM blobs WHERE space=? AND hash=?").run(space, hash);
   }
+  blobBytes(space: string): number {
+    return (this.db.prepare("SELECT COALESCE(SUM(size),0) AS n FROM blobs WHERE space=?").get(space) as { n: number }).n;
+  }
 
   close(): void {
     this.db.close();

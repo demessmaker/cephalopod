@@ -361,6 +361,9 @@ export class PgStore implements AsyncStore {
   async deleteBlob(space: string, hash: string): Promise<void> {
     await this.q("DELETE FROM blobs WHERE space=$1 AND hash=$2", [space, hash]);
   }
+  async blobBytes(space: string): Promise<number> {
+    return Number((await this.one("SELECT COALESCE(SUM(size),0) AS n FROM blobs WHERE space=$1", [space]))?.n ?? 0);
+  }
 
   async close(): Promise<void> {
     await this.db.close?.();

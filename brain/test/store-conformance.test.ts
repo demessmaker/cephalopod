@@ -183,7 +183,10 @@ describe.each(backends)("Store conformance — $name", ({ make }) => {
     expect(got?.type).toBe("image/png");
     expect([...(got?.bytes ?? [])]).toEqual([...bytes]); // bytes survive exactly (incl. CRLF/0xFF)
     expect(await store.getBlob("other", "b_abc")).toBeUndefined(); // per-space isolation
+    expect(await store.blobBytes("bsp")).toBe(bytes.byteLength); // total bytes (for quota)
+    expect(await store.blobBytes("other")).toBe(0);
     await store.deleteBlob("bsp", "b_abc");
     expect(await store.hasBlob("bsp", "b_abc")).toBe(false);
+    expect(await store.blobBytes("bsp")).toBe(0);
   });
 });

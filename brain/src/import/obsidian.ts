@@ -143,8 +143,14 @@ export async function importVault(hub: SpaceHub, space: string, vaultPath: strin
         if (bang !== "!" || !IMG.test(tgt) || blobUrl.has(tgt)) continue;
         const file = attIndex.get(tgt.toLowerCase()) ?? attIndex.get(basename(tgt).toLowerCase());
         if (!file) { report.warnings.push(`attachment not found for upload: ${tgt} in ${e.rel}`); continue; }
-        const meta = await hub.putBlob(space, new Uint8Array(readFileSync(file)), mimeOf(file));
-        blobUrl.set(tgt, `/v1/spaces/${encodeURIComponent(space)}/blobs/${meta.hash}`);
+        try {
+          const meta = await hub.putBlob(space, new Uint8Array(readFileSync(file)), mimeOf(file));
+          blobUrl.set(tgt, `/v1/spaces/${encodeURIComponent(space)}/blobs/${meta.hash}`);
+        } catch (err) {
+          // oversize / budget / read error — don't abort the whole import; fall back
+          // to a link rewrite (same as the missing-target path) and keep going
+          report.warnings.push(`attachment upload failed for ${tgt} in ${e.rel}: ${(err as Error).message}`);
+        }
       }
     }
 

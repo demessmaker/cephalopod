@@ -80,6 +80,7 @@ export interface Store {
   getBlob(space: string, hash: string): { type: string; bytes: Uint8Array } | undefined;
   hasBlob(space: string, hash: string): boolean;
   deleteBlob(space: string, hash: string): void;
+  blobBytes(space: string): number; // total stored blob bytes in a space (for quota)
 
   // --- destructive admin op (05 §5) ---
   purgeNote(space: string, id: string): void; // expunge from log, snapshots, index, search, embeddings

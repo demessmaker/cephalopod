@@ -333,6 +333,11 @@ export function createHttpServer(hub: SpaceHub, auth: Auth, opts: HttpOptions = 
   });
 
   // --- attachments / blob store (Track D) ---
+  // Inline-safe response types: a small image allowlist that EXCLUDES SVG (which can
+  // execute script). Everything else is served as an opaque download, so an uploaded
+  // text/html or image/svg+xml can't be a same-origin stored-XSS primitive.
+  const SAFE_INLINE = new Set(["image/png", "image/jpeg", "image/gif", "image/webp", "image/bmp", "image/x-icon"]);
+
   // Upload: raw binary body, content-type from the header. Write-gated. Returns the
   // content-addressed handle + the URL a note's markdown references.
   route("POST", "/spaces/:space/blobs", async (c) => {
@@ -343,22 +348,36 @@ export function createHttpServer(hub: SpaceHub, auth: Auth, opts: HttpOptions = 
       const meta = await hub.putBlob(c.params.space, new Uint8Array(c.rawBody), type);
       return json(c.res, 201, { ...meta, url: `/v1/spaces/${encodeURIComponent(c.params.space)}/blobs/${meta.hash}` });
     } catch (e) {
-      return err(c.res, 413, (e as Error).message);
+      const msg = (e as Error).message;
+      // 413 for the per-object size cap, 507 for the per-space budget, 500 otherwise
+      const code = /exceeds .* limit|empty/.test(msg) ? 413 : /budget|quota/i.test(msg) ? 507 : 500;
+      return err(c.res, code, msg);
     }
   });
-  // Download: read-gated; streamed with its stored content-type, immutable-cacheable
-  // (content-addressed) and ETag'd.
+  // Download: read-gated; immutable-cacheable + ETag'd. The stored content-type is
+  // honored ONLY for inline-safe types; all else downloads as octet-stream. `nosniff`
+  // stops the browser MIME-sniffing a mislabeled blob into an executable type.
   route("GET", "/spaces/:space/blobs/:hash", async (c) => {
     if (!(await require(c, "read"))) return;
     const blob = await hub.getBlob(c.params.space, c.params.hash);
     if (!blob) return err(c.res, 404, "no such blob");
+    const inline = SAFE_INLINE.has(blob.type);
     c.res.writeHead(200, {
-      "content-type": blob.type,
+      "content-type": inline ? blob.type : "application/octet-stream",
       "content-length": String(blob.bytes.byteLength),
+      "content-disposition": inline ? "inline" : "attachment",
+      "x-content-type-options": "nosniff",
       "cache-control": "private, max-age=31536000, immutable",
       etag: `"${c.params.hash}"`,
     });
     c.res.end(Buffer.from(blob.bytes));
+  });
+  // Admin: delete a blob (wires store.deleteBlob; blobs are dedupe-shared by hash, so
+  // this is manual reclamation — full ref-counted GC is a follow-up).
+  route("DELETE", "/spaces/:space/blobs/:hash", async (c) => {
+    if (!(await require(c, "admin"))) return;
+    await hub.deleteBlob(c.params.space, c.params.hash);
+    return json(c.res, 200, { deleted: c.params.hash });
   });
 
   const maxBody = opts.maxBodyBytes ?? 1_000_000;

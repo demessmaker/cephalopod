@@ -56,6 +56,19 @@ describe("M2.5 — Obsidian importer (attachments upload)", () => {
     expect(note.body).toContain("![ghost.png](ghost.png)"); // link fallback, no blob URL
     expect(note.body).not.toContain("/blobs/");
   });
+
+  it("an oversized attachment warns + links, without aborting the import", async () => {
+    const vault = makeVault({ "Note.md": `Big ![[big.png]] and small ![[ok.png]] here.` });
+    writeFileSync(join(vault, "big.png"), Buffer.alloc(2048, 1));
+    writeFileSync(join(vault, "ok.png"), Buffer.from([1, 2, 3]));
+    const hub = new SpaceHub(new SqliteStore(":memory:"), { maxBlobBytes: 1024 });
+
+    const r = await importVault(hub, "sp", vault, { writeBack: false, attachments: "upload" });
+    expect(r.warnings.some((w) => w.includes("big.png"))).toBe(true);
+    const note = await hub.getNoteSnapshot("sp", (await hub.search("sp", "Big"))[0].id);
+    expect(note.body).toContain("![big.png](big.png)"); // oversized -> link fallback
+    expect(note.body).toMatch(/!\[ok\.png\]\(\/v1\/spaces\/sp\/blobs\/b_/); // small one still uploaded
+  });
 });
 
 describe("M2.5 — Obsidian importer", () => {

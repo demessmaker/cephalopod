@@ -53,9 +53,31 @@ describe("blob store HTTP API", () => {
 
     const res = await fetch(`http://localhost:${port}${up.body.url}`, { headers: { authorization: `Bearer ${admin}` } });
     expect(res.status).toBe(200);
-    expect(res.headers.get("content-type")).toBe("image/png");
+    expect(res.headers.get("content-type")).toBe("image/png"); // inline-safe
+    expect(res.headers.get("content-disposition")).toBe("inline");
+    expect(res.headers.get("x-content-type-options")).toBe("nosniff");
     expect(res.headers.get("etag")).toBe(`"${up.body.hash}"`);
     expect([...new Uint8Array(await res.arrayBuffer())]).toEqual([...png]); // exact bytes
+  });
+
+  it("serves unsafe types as an opaque download (no inline stored-XSS)", async () => {
+    for (const t of ["text/html", "image/svg+xml", "application/xhtml+xml"]) {
+      const up = await upload(admin, new TextEncoder().encode("<script>alert(1)</script>"), t);
+      const res = await fetch(`http://localhost:${port}${up.body.url}`, { headers: { authorization: `Bearer ${admin}` } });
+      expect(res.headers.get("content-type")).toBe("application/octet-stream"); // never the executable type
+      expect(res.headers.get("content-disposition")).toBe("attachment");
+      expect(res.headers.get("x-content-type-options")).toBe("nosniff");
+    }
+  });
+
+  it("lets an admin delete a blob; a viewer cannot", async () => {
+    const up = await upload(admin, new Uint8Array([5, 6, 7]), "application/octet-stream");
+    const denied = await fetch(`http://localhost:${port}${up.body.url}`, { method: "DELETE", headers: { authorization: `Bearer ${reader}` } });
+    expect(denied.status).toBe(403);
+    const del = await fetch(`http://localhost:${port}${up.body.url}`, { method: "DELETE", headers: { authorization: `Bearer ${admin}` } });
+    expect(del.status).toBe(200);
+    const gone = await fetch(`http://localhost:${port}${up.body.url}`, { headers: { authorization: `Bearer ${admin}` } });
+    expect(gone.status).toBe(404);
   });
 
   it("dedupes identical content to the same hash", async () => {
@@ -87,5 +109,30 @@ describe("blob store HTTP API", () => {
   it("requires auth", async () => {
     const res = await fetch(`http://localhost:${port}/v1/spaces/kb/blobs`, { method: "POST", headers: { "content-type": "image/png" }, body: png as any });
     expect(res.status).toBe(401);
+  });
+});
+
+describe("per-space blob budget", () => {
+  it("rejects uploads past the space budget with 507 (dedupe exempt)", async () => {
+    const store2 = new SqliteStore(":memory:");
+    const auth2 = new Auth(store2);
+    const hub2 = new SpaceHub(store2, { blobBudgetBytes: 10 });
+    const tok = (await auth2.bootstrapAdmin())!.token;
+    const srv = createHttpServer(hub2, auth2);
+    await new Promise<void>((r) => srv.listen(0, r));
+    const p = (srv.address() as any).port;
+    const post = (path: string, body: unknown, type = "application/json") =>
+      fetch(`http://localhost:${p}/v1${path}`, { method: "POST", headers: { authorization: `Bearer ${tok}`, "content-type": type }, body: body as any });
+    await post("/spaces", JSON.stringify({ name: "kb" }));
+
+    const a = await post("/spaces/kb/blobs", new Uint8Array(8).fill(1), "application/octet-stream");
+    expect(a.status).toBe(201); // 8 <= 10
+    const dup = await post("/spaces/kb/blobs", new Uint8Array(8).fill(1), "application/octet-stream");
+    expect(dup.status).toBe(201); // identical content dedupes -> no new bytes
+    const b = await post("/spaces/kb/blobs", new Uint8Array(8).fill(2), "application/octet-stream");
+    expect(b.status).toBe(507); // 8 + 8 > 10 budget
+
+    srv.close();
+    store2.close();
   });
 });

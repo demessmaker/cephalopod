@@ -173,12 +173,19 @@ with the role — they only narrow it. Implemented:
   on SQLite + Postgres; migration v2). `SpaceHub.putBlob` dedupes identical uploads
   and enforces a size cap (`maxBlobBytes`, default 25 MiB). HTTP: `POST
   /spaces/:s/blobs` (raw binary, write-gated, returns the content-addressed
-  `{hash,size,type,url}`) and `GET /spaces/:s/blobs/:hash` (read-gated, byte-exact,
-  immutable-cacheable + ETag) — the request layer now buffers raw bytes (binary-safe)
-  and only JSON-parses JSON bodies. The Obsidian importer's `attachments:"upload"`
-  mode uploads referenced files and rewrites `![[img]]` → `![](…/blobs/<hash>)`.
-  **Verified:** `brain/test/blobs.test.ts` (upload/download/dedupe/413/auth) +
-  blob round-trip in the backend-parity conformance suite + importer-upload tests.
+  `{hash,size,type,url}`), `GET /spaces/:s/blobs/:hash` (read-gated, byte-exact,
+  immutable-cacheable + ETag), and admin `DELETE`. Download is **XSS-hardened**: the
+  stored content-type is honored only for an inline-safe image allowlist (SVG
+  excluded), everything else is `attachment` + `application/octet-stream`, always with
+  `nosniff`. A per-space **blob budget** (`blobBudgetBytes`, checked against
+  `SUM(size)`; default 1 GiB in `server.ts`) bounds disk use → `507`; the per-object
+  cap → `413`. The request layer buffers raw bytes (binary-safe) and only JSON-parses
+  JSON bodies. The Obsidian importer's `attachments:"upload"` mode uploads referenced
+  files and rewrites `![[img]]` → `![](…/blobs/<hash>)` (oversize/missing → warn +
+  link, never aborts). **Verified:** `brain/test/blobs.test.ts`
+  (upload/download/dedupe/413/507/auth, content-type hardening, admin delete) +
+  blob round-trip + `blobBytes` in the backend-parity conformance suite + importer
+  upload/oversize tests.
 - **D — remaining:** VS Code plugin, Rust arm, in-browser attachment rendering.
 - **E — Ops:** full-stack `docker-compose` (brain + web), metrics/tracing,
   backup/restore tooling, `ARCHITECTURE.md`, open the PR.

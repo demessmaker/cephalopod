@@ -85,7 +85,8 @@ export interface HubOptions {
   maxLoadedDocs?: number; // cap on in-memory docs (LRU-evict + snapshot beyond it); 0 = unlimited
   rateLimit?: { capacity: number; refillPerSec: number }; // per-principal WS message rate limit
   broadcaster?: Broadcaster; // C2: cross-instance fan-out (default: single-instance, none)
-  maxBlobBytes?: number; // attachment size cap (default 25 MiB)
+  maxBlobBytes?: number; // per-object attachment size cap (default 25 MiB)
+  blobBudgetBytes?: number; // per-space total blob storage cap (0 = unlimited)
 }
 
 export type SearchMode = "text" | "semantic" | "hybrid";
@@ -98,6 +99,7 @@ export class SpaceHub {
   private embedder: Embedder;
   private maxLoadedDocs: number;
   private maxBlobBytes: number;
+  private blobBudgetBytes: number;
   private limiter?: RateLimiter;
   private awarenessLimiter?: RateLimiter; // separate, looser budget for ephemeral presence
   private broadcaster?: Broadcaster;
@@ -112,6 +114,7 @@ export class SpaceHub {
     this.embedder = opts.embedder ?? new HashingEmbedder();
     this.maxLoadedDocs = opts.maxLoadedDocs ?? 0;
     this.maxBlobBytes = opts.maxBlobBytes ?? 25 * 1024 * 1024;
+    this.blobBudgetBytes = opts.blobBudgetBytes ?? 0;
     if (opts.rateLimit) {
       this.limiter = new RateLimiter(opts.rateLimit.capacity, opts.rateLimit.refillPerSec);
       // Presence is frequent, so it gets its own much larger bucket — but a bucket,
@@ -550,6 +553,12 @@ export class SpaceHub {
     if (bytes.byteLength > this.maxBlobBytes) throw new Error(`blob exceeds ${this.maxBlobBytes}-byte limit`);
     await this.store.ensureSpace(space);
     const hash = "b_" + bytesToHex(blake3(bytes));
+    // per-space storage budget — but a dedupe hit adds no bytes, so it's exempt
+    if (this.blobBudgetBytes > 0 && !(await this.store.hasBlob(space, hash))) {
+      if ((await this.store.blobBytes(space)) + bytes.byteLength > this.blobBudgetBytes) {
+        throw new Error(`space blob budget exceeded (${this.blobBudgetBytes}-byte limit)`);
+      }
+    }
     await this.store.putBlob(space, hash, type, bytes);
     return { hash, size: bytes.byteLength, type };
   }
@@ -558,6 +567,9 @@ export class SpaceHub {
   }
   hasBlob(space: string, hash: string): Promise<boolean> {
     return this.store.hasBlob(space, hash);
+  }
+  deleteBlob(space: string, hash: string): Promise<void> {
+    return this.store.deleteBlob(space, hash);
   }
 
   // Hard purge (05 §5): expunge a note everywhere + evict from memory.
