@@ -30,41 +30,44 @@ describe("RateLimiter is self-bounding", () => {
 });
 
 describe("per-principal WS rate limiting", () => {
-  it("limits a flood of messages from one principal", () => {
+  it("limits a flood of messages from one principal", async () => {
     const hub = new SpaceHub(new SqliteStore(":memory:"), { rateLimit: { capacity: 3, refillPerSec: 0 } });
     const f = fakeConn();
-    hub.addConnection(f.ch, ALLOW("p1"));
+    const conn = hub.addConnection(f.ch, ALLOW("p1"));
     for (let i = 0; i < 10; i++) f.recv({ t: "open", space: "kb", note: `n_${i}` });
+    await conn.tail; // messages process on the per-connection queue
     const limited = f.sent.filter((m) => m.t === "error" && m.code === "rate_limited");
     expect(limited).toHaveLength(7); // 3 allowed, 7 limited
   });
 
-  it("limits are per-principal, not shared across principals", () => {
+  it("limits are per-principal, not shared across principals", async () => {
     const hub = new SpaceHub(new SqliteStore(":memory:"), { rateLimit: { capacity: 2, refillPerSec: 0 } });
     const a = fakeConn(), b = fakeConn();
-    hub.addConnection(a.ch, ALLOW("pa"));
-    hub.addConnection(b.ch, ALLOW("pb"));
+    const ca = hub.addConnection(a.ch, ALLOW("pa"));
+    const cb = hub.addConnection(b.ch, ALLOW("pb"));
     for (let i = 0; i < 3; i++) a.recv({ t: "open", space: "kb", note: `a_${i}` });
+    await ca.tail;
     expect(a.sent.filter((m) => m.t === "error")).toHaveLength(1);
     // pb has its own fresh budget
     b.recv({ t: "open", space: "kb", note: "b_0" });
     b.recv({ t: "open", space: "kb", note: "b_1" });
+    await cb.tail;
     expect(b.sent.filter((m) => m.t === "error")).toHaveLength(0);
   });
 });
 
 describe("resident docs are LRU-bounded", () => {
-  it("evicts cold docs beyond the cap but keeps data retrievable", () => {
+  it("evicts cold docs beyond the cap but keeps data retrievable", async () => {
     const hub = new SpaceHub(new SqliteStore(":memory:"), { maxLoadedDocs: 5 });
-    for (let i = 0; i < 30; i++) hub.createNote("kb", { title: `T${i}`, body: `body ${i}` }, `n_${i}`);
+    for (let i = 0; i < 30; i++) await hub.createNote("kb", { title: `T${i}`, body: `body ${i}` }, `n_${i}`);
 
     // never holds more than the cap in memory
     expect((hub as any).docs.size).toBeLessThanOrEqual(5);
 
     // an evicted note rehydrates from snapshot+log on access
-    expect(hub.getNoteSnapshot("kb", "n_0").title).toBe("T0");
-    expect(hub.getNoteSnapshot("kb", "n_15").body).toBe("body 15");
+    expect((await hub.getNoteSnapshot("kb", "n_0")).title).toBe("T0");
+    expect((await hub.getNoteSnapshot("kb", "n_15")).body).toBe("body 15");
     // search still finds evicted content (derived index is durable)
-    expect(hub.search("kb", "body").length).toBeGreaterThan(0);
+    expect((await hub.search("kb", "body")).length).toBeGreaterThan(0);
   });
 });

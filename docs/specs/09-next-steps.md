@@ -93,16 +93,51 @@ with the role — they only narrow it. Implemented:
 **Track A (hardening) is complete.**
 
 ## Track C — Scale (SaaS)
-- **C1 Postgres store — ⏳ in progress.** An `AsyncStore` interface (async mirror
-  of `Store`) + `PgStore` (`store/pg.ts`) implement the full contract against
-  Postgres (native `tsvector` FTS; embeddings as `bytea` scored in JS — add the
-  `vector` extension + ANN index at scale). A backend-parity **conformance suite**
-  runs the same assertions against SQLite *and* Postgres (in-process **PGlite**),
-  both green. `asyncify()` lifts the sync store; `pgPool()` adapts production `pg`.
-  **Remaining:** make `SpaceHub`/`auth`/`http` async and select the backend at
-  startup — the larger, mechanical follow-on now that the storage layer is proven.
-- **C2 relay sharding** (NATS/Redis fan-out across instances) and **C3 real
-  embedding model + pgvector/Qdrant** behind the `Embedder` seam — later.
+- **C1 Postgres store — ✅ done, end-to-end.** `AsyncStore` (async mirror of
+  `Store`) + `PgStore` (`store/pg.ts`): full contract on Postgres (native
+  `tsvector` FTS; `bytea` embeddings scored in JS — add the `vector` extension +
+  ANN index at scale). `asyncify()` lifts the sync store; `pgPool()` adapts
+  production `pg`. **`SpaceHub`/`auth`/`http`/`server` are now async** and accept
+  either backend (a sync store is lifted via `toAsync`). Concurrency: WS messages
+  are serialized **per connection** (CRDT order), writes take a **per-doc lock**
+  (atomic apply→gate→rollback→commit), and `getDoc` is **load-guarded**.
+  Multi-statement ops (snapshot compaction, edge replace, purge) run in a
+  **connection-scoped transaction** (`pool.connect()` per txn — `pool.query`
+  BEGIN/COMMIT would smear across pooled connections), and `bytea` params bind as
+  `Buffer` (a bare `Uint8Array` view mis-serializes under node-postgres).
+  **Verified:** a backend-parity conformance suite (SQLite + PGlite), a
+  Postgres-backed brain running the full HTTP stack (`pg-hub.test.ts`), a live
+  async WS+HTTP server smoke, and a node-postgres txn-scoping + bytea test that
+  PGlite (single-connection) can't surface (`pg-tx.test.ts`). (175 tests.)
+- **C2 relay sharding — ✅ done (seam).** A `Broadcaster` (`src/broadcast.ts`)
+  fans every committed delta out to other brain instances sharing one store; on
+  receipt a hub keeps its in-memory doc coherent (if resident) and re-fans to its
+  local connections **under the doc lock** (CRDT-causal delivery order), without
+  re-persisting or re-broadcasting (origin-skip = no loop). Each message carries the
+  store's monotonic log `seq`, so a broker that reorders/redelivers is **deduped**
+  (no double-fan); `publish` errors are surfaced (not swallowed); and `SpaceHub.close()`
+  **unsubscribes** (no leaked listener / zombie hub). The store stays the source of
+  truth — broadcast is a liveness optimization. Default is single-instance; a
+  `LocalBus` (shared `EventEmitter`) stands in for a real broker (NATS / Redis
+  pub-sub / Postgres LISTEN-NOTIFY). **Verified** (`brain/test/broadcast.test.ts`):
+  a write on hub A reaches a live connection on hub B and B's cache converges; no
+  self-echo; redelivery is deduped; `close()` tears the subscription down;
+  no-broadcaster behaves exactly as before.
+- **C3 real embedding model — ✅ done (seam).** `Embedder.embed` is now `MaybeAsync`,
+  and `ApiEmbedder` (`src/embedder.ts`) routes through any OpenAI-compatible
+  `/embeddings` endpoint (OpenAI / Together / Ollama / vLLM / TEI) with configurable
+  url/model/dim/key, request timeout, a dim-mismatch guard, and a **finite-value
+  guard** (a `NaN`/`null` entry would poison every cosine score). The async hub
+  awaits the embedder on both the index and query paths, but **fault-tolerantly**:
+  an embed error/timeout never fails the write or de-syncs the rest of the derived
+  index (node/FTS/edges) — it degrades semantic search for that one note, which
+  re-embeds on the next edit. `embedderFromEnv` selects it via `CEPH_EMBED_URL`
+  (default = the dependency-free hashing embedder). **Verified**
+  (`brain/test/embedder.test.ts`): the ApiEmbedder normalizes / guards dim +
+  non-finite / surfaces errors, env-selection, the hub indexes + queries end-to-end
+  through an async model, and a failing embedder leaves the write durable + FTS
+  intact. (pgvector/Qdrant ANN indexing over the stored `bytea` vectors is the
+  remaining scale step.)
 - **D — UX:** inline editing in the explorer (Yjs-in-browser + awareness/presence),
   attachments/blob store, bidirectional Obsidian sync, VS Code plugin, Rust arm.
 - **E — Ops:** full-stack `docker-compose` (brain + web), metrics/tracing,

@@ -58,7 +58,7 @@ function asTags(v: unknown): string[] {
 // !?[[ type:: target #anchor | alias ]]
 const LINK = /(!?)\[\[\s*(?:([\w-]+)::\s*)?([^\]|#]+?)\s*(#[^\]|]*)?(?:\|([^\]]*))?\]\]/g;
 
-export function importVault(hub: SpaceHub, space: string, vaultPath: string, opts: ImportOptions = {}): ImportReport {
+export async function importVault(hub: SpaceHub, space: string, vaultPath: string, opts: ImportOptions = {}): Promise<ImportReport> {
   const t0 = performance.now();
   const writeBack = opts.writeBack ?? true;
   const update = opts.update ?? "merge";
@@ -70,7 +70,7 @@ export function importVault(hub: SpaceHub, space: string, vaultPath: string, opt
     durationMs: 0,
   };
 
-  hub.ensureSpaceExists(space);
+  await hub.ensureSpaceExists(space);
   const manifestPath = join(vaultPath, ".cephalopod", "import-manifest.json");
   const manifest: Manifest = existsSync(manifestPath) ? JSON.parse(readFileSync(manifestPath, "utf8")) : {};
 
@@ -98,7 +98,7 @@ export function importVault(hub: SpaceHub, space: string, vaultPath: string, opt
 
   // ---- PASS 2: bodies, links, attachments, write ----
   for (const e of entries) {
-    if (update === "skip" && manifest[e.rel]?.hash === e.contentHash && hub.hasNote(space, e.id)) {
+    if (update === "skip" && manifest[e.rel]?.hash === e.contentHash && (await hub.hasNote(space, e.id))) {
       report.notesSkipped++;
       continue;
     }
@@ -139,15 +139,15 @@ export function importVault(hub: SpaceHub, space: string, vaultPath: string, opt
     const fields = { title: e.title, body: rewritten, tags: asTags(tags), props };
 
     if (!opts.dryRun) {
-      if (hub.hasNote(space, e.id)) {
-        hub.patchNote(space, e.id, fields); // merge or overwrite (skip handled above)
+      if (await hub.hasNote(space, e.id)) {
+        await hub.patchNote(space, e.id, fields); // merge or overwrite (skip handled above)
         report.notesUpdated++;
       } else {
-        hub.createNote(space, fields, e.id);
+        await hub.createNote(space, fields, e.id);
         report.notesCreated++;
       }
       for (const t of new Set(embedTargets)) {
-        hub.linkNote(space, e.id, t, "embeds");
+        await hub.linkNote(space, e.id, t, "embeds");
         report.embedEdges++;
       }
       manifest[e.rel] = { id: e.id, hash: e.contentHash };

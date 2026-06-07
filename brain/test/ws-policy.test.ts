@@ -25,11 +25,11 @@ beforeAll(async () => {
   store = new SqliteStore(":memory:");
   const auth = new Auth(store);
   const hub = new SpaceHub(store);
-  adminToken = auth.bootstrapAdmin()!.token;
-  const agent = auth.createPrincipal("agent", "bot");
-  agentToken = auth.issueToken(agent.id);
-  const user = auth.createPrincipal("user", "dev");
-  userToken = auth.issueToken(user.id);
+  adminToken = (await auth.bootstrapAdmin())!.token;
+  const agent = await auth.createPrincipal("agent", "bot");
+  agentToken = await auth.issueToken(agent.id);
+  const user = await auth.createPrincipal("user", "dev");
+  userToken = await auth.issueToken(user.id);
 
   httpServer = createHttpServer(hub, auth);
   await new Promise<void>((r) => httpServer.listen(0, r));
@@ -37,11 +37,11 @@ beforeAll(async () => {
 
   const { WebSocketServer } = await import("ws");
   wss = new WebSocketServer({ port: 0 });
-  wss.on("connection", (sock, req) => {
+  wss.on("connection", async (sock, req) => {
     const tok = new URL(req.url ?? "/", "http://x").searchParams.get("token") ?? undefined;
-    const p = auth.authenticate(tok);
+    const p = await auth.authenticate(tok);
     const cAuth: ConnAuth = p
-      ? { canRead: (s) => can(auth.roleOf(s, p.id), "read"), canWrite: (s) => can(auth.roleOf(s, p.id), "write"), kind: p.kind }
+      ? { canRead: async (s) => can(await auth.roleOf(s, p.id), "read"), canWrite: async (s) => can(await auth.roleOf(s, p.id), "write"), kind: p.kind }
       : { canRead: () => false, canWrite: () => false };
     const conn = hub.addConnection(wsConn<ServerMsg, ClientMsg>(sock), cAuth);
     sock.on("close", () => hub.removeConnection(conn));

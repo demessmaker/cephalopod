@@ -66,13 +66,21 @@ export class TestClient {
     this.hubHandler!(m);
   }
 
-  applyNote(space: string, note: string, update: Uint8Array): void {
-    this.send({ t: "open", space, note });
-    this.send({ t: "update", space, note, update: b64.enc(update) });
+  // The hub now processes per-connection messages asynchronously (in order). A
+  // follow-up query is chained after, so awaiting it drains all prior messages.
+  drain(space: string): Promise<void> {
+    return this.query(space, { note: "__drain__", kind: "neighbors", hops: 0 }).then(() => {});
   }
 
-  open(space: string, note: string): void {
+  async applyNote(space: string, note: string, update: Uint8Array): Promise<void> {
     this.send({ t: "open", space, note });
+    this.send({ t: "update", space, note, update: b64.enc(update) });
+    await this.drain(space);
+  }
+
+  async open(space: string, note: string): Promise<void> {
+    this.send({ t: "open", space, note });
+    await this.drain(space);
   }
 
   query(space: string, q: GraphQuery): Promise<Result> {

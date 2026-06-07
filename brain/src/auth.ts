@@ -4,7 +4,7 @@
 import { randomBytes } from "node:crypto";
 import { blake3 } from "@noble/hashes/blake3";
 import { bytesToHex, utf8ToBytes } from "@noble/hashes/utils";
-import type { Principal, Role, Store } from "./store/store.js";
+import { toAsync, type AsyncStore, type Principal, type Role, type Store } from "./store/store.js";
 
 const RANK: Record<Role, number> = { viewer: 1, editor: 2, admin: 3 };
 export type Action = "read" | "write" | "admin";
@@ -26,31 +26,34 @@ const hashToken = (token: string) => bytesToHex(blake3(utf8ToBytes(token)));
 const newId = (prefix: string) => prefix + randomBytes(12).toString("hex");
 
 export class Auth {
-  constructor(private store: Store) {}
+  private store: AsyncStore;
+  constructor(store: Store | AsyncStore) {
+    this.store = toAsync(store);
+  }
 
-  createPrincipal(kind: "user" | "agent", name: string): Principal {
+  async createPrincipal(kind: "user" | "agent", name: string): Promise<Principal> {
     const p: Principal = { id: newId(kind === "user" ? "u_" : "a_"), kind, name };
-    this.store.addPrincipal(p);
+    await this.store.addPrincipal(p);
     return p;
   }
 
   // Returns the plaintext token ONCE; only its hash is persisted.
-  issueToken(principalId: string, capabilities: Capabilities = {}): string {
+  async issueToken(principalId: string, capabilities: Capabilities = {}): Promise<string> {
     const token = "cph_" + randomBytes(24).toString("hex");
-    this.store.addToken(hashToken(token), principalId, JSON.stringify(capabilities));
+    await this.store.addToken(hashToken(token), principalId, JSON.stringify(capabilities));
     return token;
   }
 
-  authenticate(token: string | undefined): Principal | undefined {
+  async authenticate(token: string | undefined): Promise<Principal | undefined> {
     if (!token) return undefined;
-    const pid = this.store.principalIdByToken(hashToken(token));
+    const pid = await this.store.principalIdByToken(hashToken(token));
     return pid ? this.store.getPrincipal(pid) : undefined;
   }
 
   // The capability constraints attached to a token (empty = full for its role).
-  capabilities(token: string | undefined): Capabilities {
+  async capabilities(token: string | undefined): Promise<Capabilities> {
     if (!token) return {};
-    const raw = this.store.getCapabilities(hashToken(token));
+    const raw = await this.store.getCapabilities(hashToken(token));
     try {
       return raw ? (JSON.parse(raw) as Capabilities) : {};
     } catch {
@@ -58,24 +61,24 @@ export class Auth {
     }
   }
 
-  getPrincipalById(id: string): Principal | undefined {
+  getPrincipalById(id: string): Promise<Principal | undefined> {
     return this.store.getPrincipal(id);
   }
-  roleOf(space: string, principalId: string): Role | undefined {
+  roleOf(space: string, principalId: string): Promise<Role | undefined> {
     return this.store.getRole(space, principalId);
   }
-  setRole(space: string, principalId: string, role: Role): void {
-    this.store.setRole(space, principalId, role);
+  setRole(space: string, principalId: string, role: Role): Promise<void> {
+    return this.store.setRole(space, principalId, role);
   }
   memberships(principalId: string) {
     return this.store.listMemberships(principalId);
   }
 
   // First-run bootstrap: create an admin user + token if none exist.
-  bootstrapAdmin(): { principal: Principal; token: string } | undefined {
-    if (this.store.principalCount() > 0) return undefined;
-    const principal = this.createPrincipal("user", "admin");
-    const token = this.issueToken(principal.id);
+  async bootstrapAdmin(): Promise<{ principal: Principal; token: string } | undefined> {
+    if ((await this.store.principalCount()) > 0) return undefined;
+    const principal = await this.createPrincipal("user", "admin");
+    const token = await this.issueToken(principal.id);
     return { principal, token };
   }
 }

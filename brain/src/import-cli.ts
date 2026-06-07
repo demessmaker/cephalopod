@@ -40,8 +40,8 @@ const options: ImportOptions = {
   exclude: (opt.exclude as string[]) ?? [],
 };
 
-const r = importVault(hub, space, vault, options);
-hub.snapshotAll();
+const r = await importVault(hub, space, vault, options); // ESM top-level await
+await hub.snapshotAll();
 store.close();
 
 console.log(`Imported into space "${space}"${options.dryRun ? " (dry run)" : ""}:`);

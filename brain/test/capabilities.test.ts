@@ -20,20 +20,20 @@ beforeAll(async () => {
   store = new SqliteStore(":memory:");
   auth = new Auth(store);
   const hub = new SpaceHub(store);
-  adminToken = auth.bootstrapAdmin()!.token;
+  adminToken = (await auth.bootstrapAdmin())!.token;
   httpServer = createHttpServer(hub, auth);
   await new Promise<void>((r) => httpServer.listen(0, r));
   httpPort = (httpServer.address() as any).port;
 
   wss = new WebSocketServer({ port: 0 });
-  wss.on("connection", (sock, req) => {
+  wss.on("connection", async (sock, req) => {
     const tok = new URL(req.url ?? "/", "http://x").searchParams.get("token") ?? undefined;
-    const p = auth.authenticate(tok);
-    const caps = auth.capabilities(tok);
+    const p = await auth.authenticate(tok);
+    const caps = await auth.capabilities(tok);
     const cAuth: ConnAuth = p
       ? {
-          canRead: (s) => can(auth.roleOf(s, p.id), "read"),
-          canWrite: (s) => can(auth.roleOf(s, p.id), "write") && caps.mode !== "read",
+          canRead: async (s) => can(await auth.roleOf(s, p.id), "read"),
+          canWrite: async (s) => can(await auth.roleOf(s, p.id), "write") && caps.mode !== "read",
           kind: p.kind,
         }
       : { canRead: () => false, canWrite: () => false };

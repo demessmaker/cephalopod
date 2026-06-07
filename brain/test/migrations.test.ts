@@ -9,7 +9,7 @@ import { Auth } from "../src/auth.js";
 const latest = Math.max(...MIGRATIONS.map((m) => m.version));
 
 describe("schema migrations", () => {
-  it("applies all migrations on a fresh DB and records them", () => {
+  it("applies all migrations on a fresh DB and records them", async () => {
     const db = new Database(":memory:");
     const applied = runMigrations(db);
     expect(applied).toEqual(MIGRATIONS.map((m) => m.version));
@@ -19,7 +19,7 @@ describe("schema migrations", () => {
     db.close();
   });
 
-  it("is idempotent: a second run applies nothing", () => {
+  it("is idempotent: a second run applies nothing", async () => {
     const db = new Database(":memory:");
     runMigrations(db);
     expect(runMigrations(db)).toEqual([]); // nothing left to do
@@ -27,7 +27,7 @@ describe("schema migrations", () => {
     db.close();
   });
 
-  it("upgrades a legacy DB (ad-hoc schema, no schema_migrations table)", () => {
+  it("upgrades a legacy DB (ad-hoc schema, no schema_migrations table)", async () => {
     // simulate an old DB: core tables but missing later columns and no version table
     const db = new Database(":memory:");
     db.exec(`
@@ -44,13 +44,13 @@ describe("schema migrations", () => {
     db.close();
   });
 
-  it("a SqliteStore built on the runner is fully functional", () => {
+  it("a SqliteStore built on the runner is fully functional", async () => {
     const store = new SqliteStore(":memory:");
     const auth = new Auth(store);
-    const p = auth.createPrincipal("user", "x");
-    const tok = auth.issueToken(p.id, { mode: "read" });
-    expect(auth.authenticate(tok)?.id).toBe(p.id);
-    expect(auth.capabilities(tok).mode).toBe("read"); // capabilities column present
+    const p = await auth.createPrincipal("user", "x");
+    const tok = await auth.issueToken(p.id, { mode: "read" });
+    expect((await auth.authenticate(tok))?.id).toBe(p.id);
+    expect((await auth.capabilities(tok)).mode).toBe("read"); // capabilities column present
     store.close();
   });
 });

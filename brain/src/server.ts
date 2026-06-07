@@ -3,6 +3,7 @@
 import { WebSocketServer } from "ws";
 import { SqliteStore } from "./store/sqlite.js";
 import { SpaceHub, type ConnAuth } from "./hub.js";
+import { embedderFromEnv } from "./embedder.js";
 import { Auth, can } from "./auth.js";
 import { createHttpServer } from "./http.js";
 import { wsConn } from "./ws.js";
@@ -20,10 +21,11 @@ const auth = new Auth(store);
 const hub = new SpaceHub(store, {
   maxLoadedDocs: maxDocs,
   rateLimit: { capacity: wsRpm, refillPerSec: wsRpm / 60 },
+  embedder: embedderFromEnv(), // CEPH_EMBED_URL routes through a real model; default = hashing
 });
 
-// First-run bootstrap: mint an admin principal + token.
-const boot = auth.bootstrapAdmin();
+// First-run bootstrap: mint an admin principal + token. (ESM top-level await.)
+const boot = await auth.bootstrapAdmin();
 if (boot) {
   console.log(`\n🔑 bootstrap admin token (store it; shown once):\n   ${boot.token}\n`);
 }
@@ -41,14 +43,14 @@ const wss = new WebSocketServer({
   port: WS_PORT,
   handleProtocols: (protocols) => (protocols.has("bearer") ? "bearer" : false),
 });
-wss.on("connection", (sock, req) => {
+wss.on("connection", async (sock, req) => {
   const token = tokenFromUpgrade(req);
-  const p = auth.authenticate(token);
-  const caps = auth.capabilities(token);
+  const p = await auth.authenticate(token);
+  const caps = await auth.capabilities(token);
   const connAuth: ConnAuth = p
     ? {
-        canRead: (s) => can(auth.roleOf(s, p.id), "read"),
-        canWrite: (s) => can(auth.roleOf(s, p.id), "write") && caps.mode !== "read", // read-only tokens can't write over WS
+        canRead: async (s) => can(await auth.roleOf(s, p.id), "read"),
+        canWrite: async (s) => can(await auth.roleOf(s, p.id), "write") && caps.mode !== "read", // read-only tokens can't write over WS
         kind: p.kind,
         principalId: p.id,
         caps, // capability scope (writeTags/pathPrefix) enforced on the WS write path
@@ -59,9 +61,10 @@ wss.on("connection", (sock, req) => {
 });
 console.log(`🐙 brain WS relay on ws://localhost:${WS_PORT}`);
 
-function shutdown() {
+async function shutdown() {
   console.log("\nsnapshotting + closing…");
-  hub.snapshotAll();
+  await hub.snapshotAll();
+  hub.close();
   store.close();
   wss.close();
   http.close(() => process.exit(0));

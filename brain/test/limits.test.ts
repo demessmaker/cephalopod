@@ -21,11 +21,11 @@ describe("RateLimiter (token bucket)", () => {
 
 let store: SqliteStore, auth: Auth, hub: SpaceHub, adminToken: string;
 
-beforeAll(() => {
+beforeAll(async () => {
   store = new SqliteStore(":memory:");
   auth = new Auth(store);
   hub = new SpaceHub(store);
-  adminToken = auth.bootstrapAdmin()!.token;
+  adminToken = (await auth.bootstrapAdmin())!.token;
 });
 afterAll(() => store.close());
 
