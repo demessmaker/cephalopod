@@ -334,6 +334,9 @@ export class SqliteStore implements Store {
   blobBytes(space: string): number {
     return (this.db.prepare("SELECT COALESCE(SUM(size),0) AS n FROM blobs WHERE space=?").get(space) as { n: number }).n;
   }
+  listBlobHashes(space: string): string[] {
+    return (this.db.prepare("SELECT hash FROM blobs WHERE space=?").all(space) as { hash: string }[]).map((r) => r.hash);
+  }
 
   // Online backup (Track E, ops): a consistent snapshot to `destPath` using SQLite's
   // backup API — safe to run against a live DB (WAL-aware), no manual file copy.

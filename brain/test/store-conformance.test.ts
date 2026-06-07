@@ -185,6 +185,10 @@ describe.each(backends)("Store conformance — $name", ({ make }) => {
     expect(await store.getBlob("other", "b_abc")).toBeUndefined(); // per-space isolation
     expect(await store.blobBytes("bsp")).toBe(bytes.byteLength); // total bytes (for quota)
     expect(await store.blobBytes("other")).toBe(0);
+    await store.putBlob("bsp", "b_def", "image/png", new Uint8Array([9, 9])); // a second blob
+    expect((await store.listBlobHashes("bsp")).sort()).toEqual(["b_abc", "b_def"]); // enumerable for GC
+    expect(await store.listBlobHashes("other")).toEqual([]);
+    await store.deleteBlob("bsp", "b_def");
     await store.deleteBlob("bsp", "b_abc");
     expect(await store.hasBlob("bsp", "b_abc")).toBe(false);
     expect(await store.blobBytes("bsp")).toBe(0);
