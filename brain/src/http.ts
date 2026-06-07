@@ -7,11 +7,14 @@ import type { SpaceHub } from "./hub.js";
 import type { Principal, Role } from "./store/store.js";
 import { RateLimiter } from "./ratelimit.js";
 import { scanSecrets } from "./secrets.js";
+import type { Metrics } from "./metrics.js";
 
 export interface HttpOptions {
   rateLimit?: { capacity: number; refillPerSec: number }; // per-token request rate
   maxBodyBytes?: number; // reject larger request bodies with 413 (default 1 MiB)
   maxBlobBytes?: number; // larger cap for blob uploads (default 25 MiB)
+  metrics?: Metrics; // if set, count responses + serve /metrics
+  log?: boolean; // structured per-request JSON logging to stdout
 }
 
 interface Ctx {
@@ -387,10 +390,27 @@ export function createHttpServer(hub: SpaceHub, auth: Auth, opts: HttpOptions = 
   const server = createServer(async (req, res) => {
     const url = new URL(req.url ?? "/", "http://localhost");
 
+    // metrics + structured request log on response completion (covers every path,
+    // incl. the early returns below)
+    if (opts.metrics || opts.log) {
+      const t0 = Date.now();
+      res.on("finish", () => {
+        opts.metrics?.record(res.statusCode);
+        if (opts.log) {
+          console.log(JSON.stringify({ t: "req", ts: new Date().toISOString(), method: req.method, path: url.pathname, status: res.statusCode, ms: Date.now() - t0 }));
+        }
+      });
+    }
+
     // unauthenticated liveness check (for containers/orchestration)
     if (url.pathname === "/healthz") {
       res.writeHead(200, { "content-type": "application/json" });
       return res.end(JSON.stringify({ status: "ok" }));
+    }
+    // unauthenticated Prometheus metrics (scrape over an internal network)
+    if (url.pathname === "/metrics" && opts.metrics) {
+      res.writeHead(200, { "content-type": "text/plain; version=0.0.4" });
+      return res.end(opts.metrics.render());
     }
 
     // Authenticate + rate-limit BEFORE buffering the body — both depend only on

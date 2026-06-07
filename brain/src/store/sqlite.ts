@@ -335,6 +335,12 @@ export class SqliteStore implements Store {
     return (this.db.prepare("SELECT COALESCE(SUM(size),0) AS n FROM blobs WHERE space=?").get(space) as { n: number }).n;
   }
 
+  // Online backup (Track E, ops): a consistent snapshot to `destPath` using SQLite's
+  // backup API — safe to run against a live DB (WAL-aware), no manual file copy.
+  async backup(destPath: string): Promise<void> {
+    await this.db.backup(destPath);
+  }
+
   close(): void {
     this.db.close();
   }

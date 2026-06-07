@@ -1,0 +1,8 @@
+# The runtime image ships only src/ (pure-stdlib server; browser deps load from a
+# CDN). Keep tests, deps, and config out.
+node_modules
+test
+package.json
+package-lock.json
+*.md
+tsconfig.json

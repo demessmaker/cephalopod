@@ -4,6 +4,7 @@ import { WebSocketServer } from "ws";
 import { SqliteStore } from "./store/sqlite.js";
 import { SpaceHub, type ConnAuth } from "./hub.js";
 import { embedderFromEnv } from "./embedder.js";
+import { Metrics } from "./metrics.js";
 import { Auth, can } from "./auth.js";
 import { createHttpServer } from "./http.js";
 import { wsConn } from "./ws.js";
@@ -32,10 +33,17 @@ if (boot) {
   console.log(`\n🔑 bootstrap admin token (store it; shown once):\n   ${boot.token}\n`);
 }
 
-// HTTP API (per-token rate limit; CEPH_RATE_RPM requests/min, default 600)
+// HTTP API (per-token rate limit; CEPH_RATE_RPM requests/min, default 600).
+// /metrics (Prometheus) + structured request logging are on by default; silence the
+// log with CEPH_LOG=0.
 const rpm = Number(process.env.CEPH_RATE_RPM ?? 600);
-const http = createHttpServer(hub, auth, { rateLimit: { capacity: rpm, refillPerSec: rpm / 60 } });
-http.listen(HTTP_PORT, () => console.log(`🐙 brain HTTP API on http://localhost:${HTTP_PORT}/v1`));
+const metrics = new Metrics();
+const http = createHttpServer(hub, auth, {
+  rateLimit: { capacity: rpm, refillPerSec: rpm / 60 },
+  metrics,
+  log: process.env.CEPH_LOG !== "0",
+});
+http.listen(HTTP_PORT, () => console.log(`🐙 brain HTTP API on http://localhost:${HTTP_PORT}/v1 (metrics at /metrics)`));
 
 // WS sync relay — authenticate via Authorization header, the "bearer" subprotocol
 // (browsers can't set headers, and a subprotocol keeps the token out of the URL),

@@ -1,8 +1,10 @@
 # Cephalopod self-host stack. Run: docker compose up --build
-# The brain exposes the WS sync relay (7700) and the HTTP API (7701).
-# Data (CRDT log, snapshots, derived index, auth) persists in a named volume.
+# The brain exposes the WS sync relay (7700) and the HTTP API (7701); the web
+# explorer (8080) serves the UI and reverse-proxies /v1 -> brain. Data (CRDT log,
+# snapshots, derived index, auth, blobs) persists in a named volume.
 #
-# On first start the brain prints a one-time bootstrap admin token in the logs:
+# Open the explorer at http://localhost:8080. On first start the brain prints a
+# one-time bootstrap admin token in the logs:
 #   docker compose logs brain | grep "bootstrap admin token"
 #
 # The MCP server is NOT a long-running service — agent hosts launch it over stdio
@@ -24,6 +26,8 @@ services:
       - cephalopod-data:/data
     environment:
       CEPH_DB: /data/brain.db
+      # per-space blob storage cap (bytes); structured request logging on by default
+      CEPH_BLOB_BUDGET: "1073741824"
     restart: unless-stopped
     healthcheck:
       test: ["CMD", "node", "-e", "fetch('http://localhost:7701/healthz').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
@@ -31,6 +35,29 @@ services:
       timeout: 5s
       retries: 3
       start_period: 10s
+
+  web:
+    build:
+      context: ./web
+      dockerfile: Dockerfile
+    container_name: cephalopod-web
+    # the explorer (and its /v1 proxy to the brain). The browser also opens a direct
+    # WebSocket to the brain at ws://localhost:7700 (published below), so keep both
+    # the web port and the brain WS port reachable from the browser host.
+    ports:
+      - "127.0.0.1:8080:8080"
+    environment:
+      BRAIN_URL: http://brain:7701 # in-network service name; proxied server-side
+    depends_on:
+      brain:
+        condition: service_healthy
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://localhost:8080/healthz').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 5s
 
 volumes:
   cephalopod-data:

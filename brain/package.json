@@ -9,6 +9,8 @@
     "import": "tsx src/import-cli.ts",
     "export": "tsx src/sync-cli.ts export",
     "sync": "tsx src/sync-cli.ts sync",
+    "backup": "tsx src/backup-cli.ts backup",
+    "restore": "tsx src/backup-cli.ts restore",
     "test": "vitest run",
     "typecheck": "tsc --noEmit"
   },
