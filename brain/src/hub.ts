@@ -220,10 +220,22 @@ export class SpaceHub {
   private async handle(conn: ConnState, msg: ClientMsg): Promise<void> {
     // Per-principal WS message rate limit (each update triggers a reindex, so the
     // write path is relatively expensive — don't let one principal flood it).
-    if (this.limiter && conn.auth.principalId && !this.limiter.allow(conn.auth.principalId)) {
+    // Awareness is exempt: it's ephemeral presence (cursor moves are frequent and
+    // already throttled client-side), persists nothing, and only relays bytes.
+    if (msg.t !== "awareness" && this.limiter && conn.auth.principalId && !this.limiter.allow(conn.auth.principalId)) {
       return conn.ch.send({ t: "error", code: "rate_limited", message: "rate limit exceeded" });
     }
     switch (msg.t) {
+      case "awareness": {
+        if (!(await conn.auth.canRead(msg.space))) return this.deny(conn, "read", msg.space);
+        // Ephemeral: fan out to the doc's other watchers; never touch the store.
+        const key = docKey(msg.space, msg.note);
+        for (const other of this.conns) {
+          if (other === conn || !other.open.has(key)) continue;
+          other.ch.send({ t: "awareness", space: msg.space, note: msg.note, state: msg.state });
+        }
+        break;
+      }
       case "subscribe": {
         if (!(await conn.auth.canRead(msg.space))) return this.deny(conn, "read", msg.space);
         conn.ch.send({ t: "slice", id: msg.id, ...(await this.resolveScope(msg.space, msg.scope)) });

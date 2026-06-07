@@ -138,8 +138,28 @@ with the role — they only narrow it. Implemented:
   through an async model, and a failing embedder leaves the write durable + FTS
   intact. (pgvector/Qdrant ANN indexing over the stored `bytea` vectors is the
   remaining scale step.)
-- **D — UX:** inline editing in the explorer (Yjs-in-browser + awareness/presence),
-  attachments/blob store, bidirectional Obsidian sync, VS Code plugin, Rust arm.
+## Track D — UX
+- **D1 Live editing in the explorer — ✅ done.** Build-less Yjs-in-browser editor:
+  `web/src/edit.js` (`NoteSession`) mirrors the arm replica's sync handshake
+  (`open`→`sync1`→`sync2`/`update`) against the brain WS, and `bindTextarea` two-way
+  binds a `<textarea>` to the note's `body` Y.Text via a minimal-range diff
+  (`yutil.js`). **Awareness/presence**: an ephemeral `awareness` WS frame
+  (`y-protocols/awareness`) the brain relays to a note's co-watchers — never
+  persisted, exempt from the write-path rate limit (`hub.handle`). Yjs is pulled from
+  a CDN via an import map (tests resolve the same specifiers from `node_modules`).
+  **Verified:** `web/test/edit.test.js` (edit convergence both ways, concurrent-edit
+  CRDT merge, presence, textarea binding) + `brain/test/awareness.test.ts` (relay to
+  co-watchers only, never persisted, rate-limit-exempt).
+- **D2 Bidirectional Obsidian sync — ✅ done.** The inverse of the importer plus a
+  content-hash reconcile: `markdown.ts` (`serializeNote` — frontmatter + body, id-
+  links→`[[Title]]`), `export.ts` (`exportVault`, incremental via a sync manifest
+  `id→{rel,vaultHash,brainHash}`), `sync.ts` (`syncVault` — per-note three-way
+  reconcile: propagates vault-only and brain-only edits, creates in both directions,
+  resolves both-sides conflicts by policy [default brain-wins, vault copy preserved in
+  a `.conflict.md` sidecar + note tagged `sync-conflict`]). Vault/brain hashes are
+  tracked independently so a settled tree re-syncs as a no-op. `npm run export|sync`.
+  **Verified** (`brain/test/obsidian-sync.test.ts`, 7 cases incl. round-trip stability).
+- **D — remaining:** attachments/blob store, VS Code plugin, Rust arm.
 - **E — Ops:** full-stack `docker-compose` (brain + web), metrics/tracing,
   backup/restore tooling, `ARCHITECTURE.md`, open the PR.
 
