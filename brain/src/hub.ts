@@ -26,6 +26,7 @@ import { HashingEmbedder, type Embedder } from "./embedder.js";
 import { scanSecrets } from "./secrets.js";
 import type { Capabilities } from "./auth.js";
 import { RateLimiter } from "./ratelimit.js";
+import type { Broadcaster, BroadcastMsg } from "./broadcast.js";
 
 type ServerConn = Conn<ServerMsg, ClientMsg>;
 type MaybeAsync<T> = T | Promise<T>;
@@ -77,6 +78,7 @@ export interface HubOptions {
   embedder?: Embedder; // pluggable embeddings (default: HashingEmbedder)
   maxLoadedDocs?: number; // cap on in-memory docs (LRU-evict + snapshot beyond it); 0 = unlimited
   rateLimit?: { capacity: number; refillPerSec: number }; // per-principal WS message rate limit
+  broadcaster?: Broadcaster; // C2: cross-instance fan-out (default: single-instance, none)
 }
 
 export type SearchMode = "text" | "semantic" | "hybrid";
@@ -89,6 +91,7 @@ export class SpaceHub {
   private embedder: Embedder;
   private maxLoadedDocs: number;
   private limiter?: RateLimiter;
+  private broadcaster?: Broadcaster;
   private docLocks = new Map<string, Promise<unknown>>(); // per-doc write serialization
   private loading = new Map<string, Promise<DocState>>(); // in-flight loads (load-guard)
 
@@ -98,6 +101,25 @@ export class SpaceHub {
     this.embedder = opts.embedder ?? new HashingEmbedder();
     this.maxLoadedDocs = opts.maxLoadedDocs ?? 0;
     if (opts.rateLimit) this.limiter = new RateLimiter(opts.rateLimit.capacity, opts.rateLimit.refillPerSec);
+    this.broadcaster = opts.broadcaster;
+    this.broadcaster?.subscribe((msg) => void this.onRemoteUpdate(msg));
+  }
+
+  // C2: a delta committed on another instance (sharing our store). The store is
+  // already updated by the origin, so we don't persist or reindex — we only keep
+  // our in-memory cache coherent (if the doc is resident) and fan out to the local
+  // connections that hold it open, exactly as if it had been applied here.
+  private async onRemoteUpdate(msg: BroadcastMsg): Promise<void> {
+    if (msg.origin === this.broadcaster?.id) return; // skip our own publishes
+    const key = docKey(msg.space, msg.note);
+    const bytes = b64.dec(msg.update);
+    await this.withDocLock(key, async () => {
+      const st = this.docs.get(key);
+      if (st) Y.applyUpdate(st.doc, bytes, "remote");
+    });
+    for (const conn of this.conns) {
+      if (conn.open.has(key)) conn.ch.send({ t: "update", space: msg.space, note: msg.note, update: msg.update });
+    }
   }
 
   // Serialize writes to one doc (the apply→gate→rollback→commit section must be
@@ -323,6 +345,8 @@ export class SpaceHub {
       if (other === except || !other.open.has(key)) continue;
       other.ch.send({ t: "update", space, note, update: raw });
     }
+    // C2: fan the delta out to other instances sharing our store (no-op single-node).
+    this.broadcaster?.publish({ origin: this.broadcaster.id, space, note, update: raw });
   }
 
   // Apply a server-side edit (HTTP/MCP) through the same write path as WS deltas.
@@ -422,7 +446,7 @@ export class SpaceHub {
   }
   // vector ids, post-filtered by facet tags (the store's vector scan has no tag clause)
   private async semanticIds(space: string, query: string, limit: number, includeDrafts: boolean, tagFilters: string[]): Promise<string[]> {
-    const raw = await this.store.searchSemantic(space, this.embedder.embed(query), tagFilters.length ? limit * 10 : limit, includeDrafts);
+    const raw = await this.store.searchSemantic(space, await this.embedder.embed(query), tagFilters.length ? limit * 10 : limit, includeDrafts);
     if (!tagFilters.length) return raw;
     const nodes = await Promise.all(raw.map((id) => this.store.getNode(space, id)));
     return nodes.filter((n) => n && tagFilters.every((t) => n.tags.includes(t))).slice(0, limit).map((n) => n!.id);
@@ -587,7 +611,7 @@ export class SpaceHub {
     const body = h.body.toString();
     await this.store.upsertNode(space, { id: note, title, tags: h.tags.toArray(), stub: !!h.meta.get("stub") });
     await this.store.searchUpsert(space, note, title, body);
-    await this.store.upsertEmbedding(space, note, this.embedder.embed(`${title}\n${body}`));
+    await this.store.upsertEmbedding(space, note, await this.embedder.embed(`${title}\n${body}`));
     // Wikilink targets need async resolution (title->id, stub creation). Resolve
     // the distinct raw targets first, then derive edges with a sync map lookup.
     const raw = deriveEdges(note, body, (t) => t);

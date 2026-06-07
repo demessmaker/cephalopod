@@ -103,9 +103,27 @@ with the role — they only narrow it. Implemented:
   (atomic apply→gate→rollback→commit), and `getDoc` is **load-guarded**.
   **Verified:** a backend-parity conformance suite (SQLite + PGlite), plus a
   Postgres-backed brain running the full HTTP stack (`pg-hub.test.ts`) and a live
-  async WS+HTTP server smoke. (159 tests across the repo.)
-- **C2 relay sharding** (NATS/Redis fan-out across instances) and **C3 real
-  embedding model + pgvector/Qdrant** behind the `Embedder` seam — later.
+  async WS+HTTP server smoke. (167 tests across the repo.)
+- **C2 relay sharding — ✅ done (seam).** A `Broadcaster` (`src/broadcast.ts`)
+  fans every committed delta out to other brain instances sharing one store; on
+  receipt a hub keeps its in-memory doc coherent (if resident) and re-fans to its
+  local connections, without re-persisting or re-broadcasting (origin-skip = no
+  loop). The store stays the source of truth — broadcast is a liveness optimization.
+  Default is single-instance (no broadcaster); a `LocalBus` (shared `EventEmitter`)
+  stands in for a real broker (NATS / Redis pub-sub / Postgres LISTEN-NOTIFY).
+  **Verified** (`brain/test/broadcast.test.ts`): a write on hub A reaches a live
+  connection on hub B and B's cache converges; a hub doesn't echo its own publishes;
+  no-broadcaster behaves exactly as before.
+- **C3 real embedding model — ✅ done (seam).** `Embedder.embed` is now `MaybeAsync`,
+  and `ApiEmbedder` (`src/embedder.ts`) routes through any OpenAI-compatible
+  `/embeddings` endpoint (OpenAI / Together / Ollama / vLLM / TEI) with configurable
+  url/model/dim/key, request timeout, and a dim-mismatch guard. The async hub awaits
+  the embedder on both the index and query paths. `embedderFromEnv` selects it via
+  `CEPH_EMBED_URL` (default = the dependency-free hashing embedder). **Verified**
+  (`brain/test/embedder.test.ts`): the ApiEmbedder normalizes / guards dim / surfaces
+  errors, env-selection, and the hub indexes + queries end-to-end through an async
+  model. (pgvector/Qdrant ANN indexing over the stored `bytea` vectors is the
+  remaining scale step.)
 - **D — UX:** inline editing in the explorer (Yjs-in-browser + awareness/presence),
   attachments/blob store, bidirectional Obsidian sync, VS Code plugin, Rust arm.
 - **E — Ops:** full-stack `docker-compose` (brain + web), metrics/tracing,

@@ -3,6 +3,7 @@
 import { WebSocketServer } from "ws";
 import { SqliteStore } from "./store/sqlite.js";
 import { SpaceHub, type ConnAuth } from "./hub.js";
+import { embedderFromEnv } from "./embedder.js";
 import { Auth, can } from "./auth.js";
 import { createHttpServer } from "./http.js";
 import { wsConn } from "./ws.js";
@@ -20,6 +21,7 @@ const auth = new Auth(store);
 const hub = new SpaceHub(store, {
   maxLoadedDocs: maxDocs,
   rateLimit: { capacity: wsRpm, refillPerSec: wsRpm / 60 },
+  embedder: embedderFromEnv(), // CEPH_EMBED_URL routes through a real model; default = hashing
 });
 
 // First-run bootstrap: mint an admin principal + token. (ESM top-level await.)
