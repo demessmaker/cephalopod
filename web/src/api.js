@@ -45,3 +45,27 @@ export function liveOpen(noteId, onUpdate) {
   };
   return () => ws && ws.close();
 }
+
+// A WebSocket transport for a collaborative editor session. `onFrame` receives a
+// synthetic { t: "__open" } once connected, then every server frame. Returns
+// { send, close, space }. Frames sent before the socket opens are buffered.
+export function editorTransport(onFrame) {
+  const ws = new WebSocket(wsBase, ["bearer", token]);
+  let open = false;
+  const backlog = [];
+  ws.onopen = () => {
+    open = true;
+    for (const m of backlog) ws.send(JSON.stringify(m));
+    backlog.length = 0;
+    onFrame({ t: "__open" });
+  };
+  ws.onmessage = (e) => {
+    try {
+      onFrame(JSON.parse(e.data));
+    } catch {}
+  };
+  const send = (m) => (open ? ws.send(JSON.stringify(m)) : backlog.push(m));
+  return { send, close: () => ws.close(), space };
+}
+
+export const creds = () => ({ token, space, wsBase });

@@ -30,6 +30,8 @@ export type ClientMsg =
   | { t: "sync1"; space: string; note: string; sv: B64 }
   | { t: "sync2"; space: string; note: string; update: B64 }
   | { t: "update"; space: string; note: string; update: B64 }
+  // ephemeral presence (cursor/selection/identity); relayed to co-watchers, never persisted
+  | { t: "awareness"; space: string; note: string; state: B64 }
   | { t: "query"; id: string; space: string; q: GraphQuery };
 
 export type ServerMsg =
@@ -37,6 +39,7 @@ export type ServerMsg =
   | { t: "sync1"; space: string; note: string; sv: B64 }
   | { t: "sync2"; space: string; note: string; update: B64 }
   | { t: "update"; space: string; note: string; update: B64 }
+  | { t: "awareness"; space: string; note: string; state: B64 }
   | { t: "result"; id: string; nodes: NodeSummary[]; edges: EdgeRec[] }
   | { t: "error"; code: string; message: string; ref?: string };
 

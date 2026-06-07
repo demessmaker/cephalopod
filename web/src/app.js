@@ -1,9 +1,20 @@
-// Graph explorer UI: search -> graph -> click-to-expand -> live refresh.
-import { api, setCreds, liveOpen } from "./api.js";
+// Graph explorer UI: search -> graph -> click-to-expand -> live refresh + edit.
+import { api, setCreds, liveOpen, editorTransport, creds } from "./api.js";
 import { buildGraph, layout, bounds } from "./graph.js";
+import { NoteSession, bindTextarea } from "./edit.js";
 
 const $ = (id) => document.getElementById(id);
 let disposeLive = () => {};
+let editor = null; // { session, transport, dispose }
+let currentId = null; // the focused note
+
+// a stable per-browser identity for presence
+const me = (() => {
+  let id = localStorage.getItem("ceph.user");
+  if (!id) localStorage.setItem("ceph.user", (id = "u" + Math.random().toString(36).slice(2, 6)));
+  const colors = ["#e6194B", "#3cb44b", "#4363d8", "#f58231", "#911eb4", "#42d4f4"];
+  return { name: id, color: colors[[...id].reduce((a, c) => a + c.charCodeAt(0), 0) % colors.length] };
+})();
 
 // --- credentials (persisted) ---
 for (const k of ["token", "space", "ws"]) $(k).value = localStorage.getItem("ceph." + k) || (k === "ws" ? "ws://localhost:7700" : "");
@@ -45,6 +56,8 @@ function renderResults(hits) {
 // --- focus a note: load it + neighbors, lay out, render, subscribe ---
 async function focusNote(id) {
   disposeLive();
+  stopEdit();
+  currentId = id;
   let note, sub;
   try {
     [note, sub] = await Promise.all([api.note(id), api.neighbors(id, 1)]);
@@ -56,14 +69,55 @@ async function focusNote(id) {
   const { nodes, links } = buildGraph(id, sub);
   layout(nodes, links, 350);
   renderGraph(id, nodes, links);
-  disposeLive = liveOpen(id, () => focusNote(id)); // live refresh on change
+  // live refresh on change — but not while editing (the CRDT session is live already)
+  disposeLive = liveOpen(id, () => { if (!editor) focusNote(id); });
 }
 
 function renderNote(n) {
   $("note").innerHTML =
     `<h1>${esc(n.title || n.id)}</h1>` +
     (n.tags?.length ? `<div>${n.tags.map((t) => `<span class="tag">${esc(t)}</span>`).join("")}</div>` : "") +
-    `<pre>${esc(n.body || "(empty)")}</pre>`;
+    `<div class="note-actions"><button id="edit-toggle">✎ Edit</button> <span id="presence" class="muted"></span></div>` +
+    `<pre id="body-view">${esc(n.body || "(empty)")}</pre>` +
+    `<textarea id="body-edit" class="hidden" spellcheck="false"></textarea>`;
+  $("edit-toggle").onclick = () => (editor ? stopEdit(true) : startEdit(n.id));
+}
+
+// --- collaborative editing: open a CRDT session over WS, bind the textarea ---
+function startEdit(id) {
+  if (!creds().wsBase) return;
+  const view = $("body-view"), ta = $("body-edit"), btn = $("edit-toggle");
+  view.classList.add("hidden");
+  ta.classList.remove("hidden");
+  btn.textContent = "✓ Done";
+
+  let session;
+  const transport = editorTransport((m) => {
+    if (m.t === "__open") session.start();
+    else if (m.t === "awareness" || m.note === id) session.receive(m);
+  });
+  session = new NoteSession(transport.send, { space: transport.space, note: id, user: me });
+  const unbind = bindTextarea(session, ta);
+  const renderPresence = () => {
+    const peers = session.peers();
+    // peer color is untrusted (from awareness) — only allow a hex literal, else the
+    // CSS context (style="color:…") would accept arbitrary declarations
+    const safeColor = (c) => (/^#[0-9a-f]{3,8}$/i.test(c || "") ? c : "#888");
+    $("presence").innerHTML = peers.length
+      ? "editing: " + peers.map((p) => `<span class="peer" style="color:${safeColor(p.color)}">${esc(p.name || "?")}</span>`).join(", ")
+      : "";
+  };
+  session.awareness.on("change", renderPresence);
+  ta.addEventListener("keyup", () => session.setCursor(ta.selectionStart));
+  ta.addEventListener("click", () => session.setCursor(ta.selectionStart));
+  editor = { session, transport, dispose: () => { unbind(); session.destroy(); transport.close(); } };
+}
+
+function stopEdit(refresh) {
+  if (!editor) return;
+  editor.dispose();
+  editor = null;
+  if (refresh) focusNote(currentId); // re-render the read view from the saved note
 }
 
 function renderGraph(focusId, nodes, links) {

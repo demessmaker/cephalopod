@@ -9,6 +9,8 @@
     "test": "vitest run"
   },
   "devDependencies": {
-    "vitest": "^2.1.8"
+    "vitest": "^2.1.8",
+    "y-protocols": "1.0.7",
+    "yjs": "13.6.31"
   }
 }
