@@ -80,7 +80,20 @@ const baseline: Migration = {
   },
 };
 
-export const MIGRATIONS: Migration[] = [baseline];
+// v2 — attachments / blob store (content-addressed, per-space).
+const blobs: Migration = {
+  version: 2,
+  name: "blobs",
+  up(db) {
+    db.exec(`
+      CREATE TABLE IF NOT EXISTS blobs(
+        space TEXT, hash TEXT, type TEXT, size INTEGER, bytes BLOB, created_at INTEGER,
+        PRIMARY KEY(space, hash));
+    `);
+  },
+};
+
+export const MIGRATIONS: Migration[] = [baseline, blobs];
 
 /** Apply all un-applied migrations in version order. Returns versions applied. */
 export function runMigrations(db: Database.Database): number[] {

@@ -4,7 +4,7 @@
 import { describe, it, expect, afterEach } from "vitest";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, existsSync, rmSync } from "node:fs";
+import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, readdirSync, existsSync, rmSync } from "node:fs";
 import { SqliteStore } from "../src/store/sqlite.js";
 import { SpaceHub } from "../src/hub.js";
 import { importVault } from "../src/import/obsidian.js";
@@ -168,6 +168,38 @@ describe("bidirectional sync", () => {
     const r2 = await syncVault(hub, "sp", vault);
     expect(r2.imported).toBe(0);
     expect((await hub.listNotes("sp", 1000, true)).length).toBe(before);
+  });
+
+  it("disambiguates duplicate titles consistently (export and sync agree, no overwrite)", async () => {
+    const hub = fresh();
+    // three distinct notes, same title + folder -> would collide on one file
+    await hub.createNote("sp", { title: "Dup", body: "first note", props: { path: "f" } });
+    await hub.createNote("sp", { title: "Dup", body: "second note", props: { path: "f" } });
+    await hub.createNote("sp", { title: "Dup", body: "third note", props: { path: "f" } });
+    const vault = makeVault();
+
+    const r = await syncVault(hub, "sp", vault);
+    expect(r.exported).toBe(3);
+    // three distinct files, every body preserved (no clobber)
+    const files = readdirSync(join(vault, "f")).filter((f) => f.endsWith(".md"));
+    expect(files.length).toBe(3);
+    const bodies = files.map((f) => read(vault, `f/${f}`)).join("\n");
+    for (const want of ["first note", "second note", "third note"]) expect(bodies).toContain(want);
+    // settles to a no-op (export and sync chose the same files)
+    const r2 = await syncVault(hub, "sp", vault);
+    expect(r2.exported + r2.imported + r2.conflicts.length).toBe(0);
+  });
+
+  it("ignores CRLF / trailing-whitespace churn in the vault (no phantom re-import)", async () => {
+    const vault = makeVault({ "Note.md": `body line one\nbody line two\n` });
+    const hub = fresh();
+    await syncVault(hub, "sp", vault); // import + write back id
+
+    // rewrite with CRLF line endings and an extra trailing newline — semantically identical
+    writeFileSync(join(vault, "Note.md"), read(vault, "Note.md").replace(/\n/g, "\r\n") + "\r\n");
+    const r = await syncVault(hub, "sp", vault);
+    expect(r.imported).toBe(0); // not seen as a change
+    expect(r.conflicts).toHaveLength(0);
   });
 
   it("creates in both directions: new vault file -> brain, new brain note -> vault", async () => {

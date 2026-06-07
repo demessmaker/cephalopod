@@ -312,6 +312,29 @@ export class SqliteStore implements Store {
     tx();
   }
 
+  // --- attachments / blob store (content-addressed) ---
+  putBlob(space: string, hash: string, type: string, bytes: Uint8Array): void {
+    this.ensureSpace(space);
+    this.db
+      .prepare("INSERT OR IGNORE INTO blobs(space, hash, type, size, bytes, created_at) VALUES (?,?,?,?,?,?)")
+      .run(space, hash, type, bytes.byteLength, buf(bytes), Date.now());
+  }
+  getBlob(space: string, hash: string): { type: string; bytes: Uint8Array } | undefined {
+    const r = this.db.prepare("SELECT type, bytes FROM blobs WHERE space=? AND hash=?").get(space, hash) as
+      | { type: string; bytes: Buffer }
+      | undefined;
+    return r ? { type: r.type, bytes: u8(r.bytes) } : undefined;
+  }
+  hasBlob(space: string, hash: string): boolean {
+    return !!this.db.prepare("SELECT 1 FROM blobs WHERE space=? AND hash=?").get(space, hash);
+  }
+  deleteBlob(space: string, hash: string): void {
+    this.db.prepare("DELETE FROM blobs WHERE space=? AND hash=?").run(space, hash);
+  }
+  blobBytes(space: string): number {
+    return (this.db.prepare("SELECT COALESCE(SUM(size),0) AS n FROM blobs WHERE space=?").get(space) as { n: number }).n;
+  }
+
   close(): void {
     this.db.close();
   }

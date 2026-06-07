@@ -10,6 +10,10 @@ import type { SpaceHub, NoteSnapshot } from "../hub.js";
 import { serializeNote, notePath, insideVault, type SerializeOptions } from "./markdown.js";
 
 export const hashOf = (s: string) => bytesToHex(blake3(utf8ToBytes(s)));
+// Vault-side content hash for change detection: tolerate CRLF / trailing-whitespace
+// churn (Windows / Obsidian rewrites) so it doesn't look like a real edit. Used only
+// for the manifest's `vaultHash` (never for content integrity), so normalizing is safe.
+export const vaultHashOf = (s: string) => hashOf(s.replace(/\r\n/g, "\n").replace(/\s+$/, ""));
 
 export interface SyncManifest {
   [noteId: string]: { rel: string; vaultHash: string; brainHash: string };
@@ -71,24 +75,41 @@ export async function snapshotSpace(hub: SpaceHub, space: string, includeDrafts:
   return { notes, idToTitle };
 }
 
+// Assign each note a unique vault-relative path, disambiguating notes that collide on
+// the same file (duplicate title in a folder) with an id fragment. Shared by export
+// and sync so both agree on a note's file — otherwise sync could overwrite one note's
+// file with another's (data loss).
+export function assignPaths(notes: NoteSnapshot[], warnings?: string[]): Map<string, string> {
+  const rels = new Map<string, string>();
+  const used = new Map<string, string>(); // rel -> id
+  const taken = (r: string) => used.has(r) && used.get(r) !== undefined;
+  for (const snap of notes) {
+    let rel = notePath(snap);
+    if (used.has(rel) && used.get(rel) !== snap.id) {
+      // disambiguate with a short id fragment; fall back to the full (unique) id if
+      // that also collides — time-based ids share prefixes, so 3+ same-title notes
+      // could otherwise clobber each other.
+      let cand = rel.replace(/\.md$/, ` (${snap.id.slice(2, 8)}).md`);
+      if (taken(cand) && used.get(cand) !== snap.id) cand = rel.replace(/\.md$/, ` (${snap.id}).md`);
+      rel = cand;
+      warnings?.push(`duplicate file path for "${snap.title}" — wrote ${rel}`);
+    }
+    used.set(rel, snap.id);
+    rels.set(snap.id, rel);
+  }
+  return rels;
+}
+
 export async function exportVault(hub: SpaceHub, space: string, vaultPath: string, opts: ExportOptions = {}): Promise<ExportReport> {
   const t0 = performance.now();
   const report: ExportReport = { filesWritten: 0, filesUnchanged: 0, durationMs: 0, warnings: [] };
   const { notes, idToTitle } = await snapshotSpace(hub, space, opts.includeDrafts ?? false);
   const manifest = loadSyncManifest(vaultPath);
   const next: SyncManifest = {};
+  const rels = assignPaths(notes, report.warnings);
 
-  // Guard against two notes mapping to the same file (duplicate titles in a folder).
-  const usedRel = new Map<string, string>();
   for (const snap of notes) {
-    let rel = notePath(snap);
-    const clash = usedRel.get(rel);
-    if (clash && clash !== snap.id) {
-      rel = rel.replace(/\.md$/, ` (${snap.id.slice(2, 8)}).md`); // disambiguate by id fragment
-      report.warnings.push(`duplicate file path for "${snap.title}" — wrote ${rel}`);
-    }
-    usedRel.set(rel, snap.id);
-
+    const rel = rels.get(snap.id)!;
     const md = serializeNote(snap, idToTitle, opts);
     const brainHash = hashOf(md);
     const full = join(vaultPath, rel);
@@ -111,7 +132,7 @@ export async function exportVault(hub: SpaceHub, space: string, vaultPath: strin
       writeFileSync(full, md);
     }
     report.filesWritten++;
-    next[snap.id] = { rel, vaultHash: hashOf(md), brainHash };
+    next[snap.id] = { rel, vaultHash: vaultHashOf(md), brainHash };
   }
 
   if (!opts.dryRun) saveSyncManifest(vaultPath, next);

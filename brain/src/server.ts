@@ -15,6 +15,7 @@ const HTTP_PORT = Number(process.env.CEPH_HTTP_PORT ?? 7701);
 const DB = process.env.CEPH_DB ?? "./brain.db";
 const wsRpm = Number(process.env.CEPH_WS_RATE_RPM ?? 1200); // per-principal WS message rate
 const maxDocs = Number(process.env.CEPH_MAX_DOCS ?? 5000); // cap on resident in-memory docs
+const blobBudget = Number(process.env.CEPH_BLOB_BUDGET ?? 1024 * 1024 * 1024); // per-space blob cap (1 GiB; 0 = unlimited)
 
 const store = new SqliteStore(DB);
 const auth = new Auth(store);
@@ -22,6 +23,7 @@ const hub = new SpaceHub(store, {
   maxLoadedDocs: maxDocs,
   rateLimit: { capacity: wsRpm, refillPerSec: wsRpm / 60 },
   embedder: embedderFromEnv(), // CEPH_EMBED_URL routes through a real model; default = hashing
+  blobBudgetBytes: blobBudget, // deployments are storage-bounded per space by default
 });
 
 // First-run bootstrap: mint an admin principal + token. (ESM top-level await.)

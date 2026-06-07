@@ -173,4 +173,20 @@ describe.each(backends)("Store conformance — $name", ({ make }) => {
     expect((await store.loadDoc("p", "doc")).updates).toEqual([]);
     expect(await store.edgesAdjacent("p", "doc", "out")).toEqual([]);
   });
+
+  it("blob store: round-trip, dedupe, isolation, delete", async () => {
+    const bytes = new Uint8Array([0, 1, 2, 250, 255, 13, 10]);
+    await store.putBlob("bsp", "b_abc", "image/png", bytes);
+    await store.putBlob("bsp", "b_abc", "image/png", bytes); // idempotent (dedupe)
+    expect(await store.hasBlob("bsp", "b_abc")).toBe(true);
+    const got = await store.getBlob("bsp", "b_abc");
+    expect(got?.type).toBe("image/png");
+    expect([...(got?.bytes ?? [])]).toEqual([...bytes]); // bytes survive exactly (incl. CRLF/0xFF)
+    expect(await store.getBlob("other", "b_abc")).toBeUndefined(); // per-space isolation
+    expect(await store.blobBytes("bsp")).toBe(bytes.byteLength); // total bytes (for quota)
+    expect(await store.blobBytes("other")).toBe(0);
+    await store.deleteBlob("bsp", "b_abc");
+    expect(await store.hasBlob("bsp", "b_abc")).toBe(false);
+    expect(await store.blobBytes("bsp")).toBe(0);
+  });
 });
