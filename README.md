@@ -34,14 +34,18 @@ back to the central brain.
 ### Quickstart (self-host)
 
 ```bash
-docker compose up --build                                   # start the brain
+docker compose up --build                                   # brain + web explorer
 docker compose logs brain | grep "bootstrap admin token"   # one-time admin token
-# HTTP API on :7701, WS sync relay on :7700
+# Explorer :8080 · HTTP API :7701 · WS relay :7700 · metrics :7701/metrics
 ```
 
 Then create a space, seed from an Obsidian vault (`brain`: `npm run import`), and
 point an agent at it via the MCP server (`mcp/README.md`). Agents get live
-`resources/updated` notifications as the graph changes.
+`resources/updated` notifications as the graph changes. Back up the database with
+`brain`: `npm run backup -- <dest.db>` (consistent online snapshot).
+
+See **[ARCHITECTURE.md](ARCHITECTURE.md)** for the as-built system reference
+(components, data model, sync/scale/security, operations).
 
 ### Specs
 

@@ -48,6 +48,12 @@ export function createWebServer({ brainUrl = "http://localhost:7701", staticDir 
       return;
     }
 
+    // liveness probe (containers / orchestration)
+    if (url.pathname === "/healthz") {
+      res.writeHead(200, { "content-type": "application/json" });
+      return res.end(JSON.stringify({ status: "ok" }));
+    }
+
     // static files
     let path = url.pathname === "/" ? "/index.html" : url.pathname;
     const full = join(staticDir, normalize(path).replace(/^(\.\.[/\\])+/, ""));

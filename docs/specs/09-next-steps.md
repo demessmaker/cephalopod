@@ -187,8 +187,25 @@ with the role — they only narrow it. Implemented:
   blob round-trip + `blobBytes` in the backend-parity conformance suite + importer
   upload/oversize tests.
 - **D — remaining:** VS Code plugin, Rust arm, in-browser attachment rendering.
-- **E — Ops:** full-stack `docker-compose` (brain + web), metrics/tracing,
-  backup/restore tooling, `ARCHITECTURE.md`, open the PR.
+
+## Track E — Ops ✅ (done)
+- **Full-stack `docker-compose`** — adds a `web` service (build-less explorer,
+  pure-stdlib `serve.mjs`, own Dockerfile + `.dockerignore`, `/healthz`) alongside the
+  brain, wired `BRAIN_URL=http://brain:7701`, `depends_on: brain healthy`, both
+  healthchecked and non-root. `docker compose config` validates the stack.
+- **Observability** — `/metrics` (Prometheus text: request totals by status class,
+  uptime, RSS via `src/metrics.ts`) and **structured per-request JSON logging**
+  (method/path/status/ms), on by default (`CEPH_LOG=0` to silence). Both wired in
+  `http.ts`/`server.ts`. Verified by `brain/test/metrics.test.ts`.
+- **Backup/restore** — `npm run backup|restore` (`src/backup-cli.ts`) using SQLite's
+  online `.backup()` API (WAL-aware, consistent against a live brain), not a file
+  copy. Verified by `brain/test/backup.test.ts` (snapshot reopens with all data +
+  blobs; restore round-trips).
+- **`ARCHITECTURE.md`** — authoritative as-built reference (components, data model,
+  concurrency, storage/scale, security, attachments, sync, ops), linked from the
+  README; quickstart updated for the full stack + backup.
+- *(Live container build/run not exercised in-sandbox — no Docker daemon — but compose
+  config validates and the web image follows the proven brain Dockerfile pattern.)*
 
 ## Sequencing
 
