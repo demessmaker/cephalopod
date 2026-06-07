@@ -75,6 +75,12 @@ export interface Store {
   getSecretScan(space: string): "off" | "warn" | "block";
   setSecretScan(space: string, mode: "off" | "warn" | "block"): void;
 
+  // --- attachments / blob store (content-addressed, per-space) ---
+  putBlob(space: string, hash: string, type: string, bytes: Uint8Array): void; // idempotent (dedupe by hash)
+  getBlob(space: string, hash: string): { type: string; bytes: Uint8Array } | undefined;
+  hasBlob(space: string, hash: string): boolean;
+  deleteBlob(space: string, hash: string): void;
+
   // --- destructive admin op (05 §5) ---
   purgeNote(space: string, id: string): void; // expunge from log, snapshots, index, search, embeddings
 

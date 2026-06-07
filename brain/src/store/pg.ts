@@ -112,6 +112,8 @@ export class PgStore implements AsyncStore {
       CREATE TABLE IF NOT EXISTS space_settings(
         space text PRIMARY KEY, agent_mode text, required_facets text, max_notes int, secret_scan text);
       CREATE TABLE IF NOT EXISTS embeddings(space text, id text, vec bytea, PRIMARY KEY(space, id));
+      CREATE TABLE IF NOT EXISTS blobs(
+        space text, hash text, type text, size int, bytes bytea, created_at bigint, PRIMARY KEY(space, hash));
     `);
   }
 
@@ -339,6 +341,25 @@ export class PgStore implements AsyncStore {
       ]) await q(sql, [space, id]);
       await q("DELETE FROM edges WHERE space=$1 AND (frm=$2 OR dst=$2)", [space, id]);
     });
+  }
+
+  // --- attachments / blob store (content-addressed) ---
+  async putBlob(space: string, hash: string, type: string, bytes: Uint8Array): Promise<void> {
+    await this.ensureSpace(space);
+    await this.q(
+      "INSERT INTO blobs(space, hash, type, size, bytes, created_at) VALUES ($1,$2,$3,$4,$5,$6) ON CONFLICT(space, hash) DO NOTHING",
+      [space, hash, type, bytes.byteLength, toBuf(bytes), Date.now()],
+    );
+  }
+  async getBlob(space: string, hash: string): Promise<{ type: string; bytes: Uint8Array } | undefined> {
+    const r = await this.one("SELECT type, bytes FROM blobs WHERE space=$1 AND hash=$2", [space, hash]);
+    return r ? { type: r.type, bytes: toU8(r.bytes) } : undefined;
+  }
+  async hasBlob(space: string, hash: string): Promise<boolean> {
+    return !!(await this.one("SELECT 1 AS one FROM blobs WHERE space=$1 AND hash=$2", [space, hash]));
+  }
+  async deleteBlob(space: string, hash: string): Promise<void> {
+    await this.q("DELETE FROM blobs WHERE space=$1 AND hash=$2", [space, hash]);
   }
 
   async close(): Promise<void> {

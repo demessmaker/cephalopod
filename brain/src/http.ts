@@ -11,6 +11,7 @@ import { scanSecrets } from "./secrets.js";
 export interface HttpOptions {
   rateLimit?: { capacity: number; refillPerSec: number }; // per-token request rate
   maxBodyBytes?: number; // reject larger request bodies with 413 (default 1 MiB)
+  maxBlobBytes?: number; // larger cap for blob uploads (default 25 MiB)
 }
 
 interface Ctx {
@@ -19,6 +20,7 @@ interface Ctx {
   url: URL;
   params: Record<string, string>;
   body: any;
+  rawBody: Buffer; // raw request bytes (for binary uploads); body is the JSON parse of it
   principal: Principal;
   caps: Capabilities;
 }
@@ -330,7 +332,38 @@ export function createHttpServer(hub: SpaceHub, auth: Auth, opts: HttpOptions = 
     err(c.res, 400, "query needs match.text, match.semantic, or traverse.from");
   });
 
+  // --- attachments / blob store (Track D) ---
+  // Upload: raw binary body, content-type from the header. Write-gated. Returns the
+  // content-addressed handle + the URL a note's markdown references.
+  route("POST", "/spaces/:space/blobs", async (c) => {
+    if (!(await require(c, "write"))) return;
+    if (!c.rawBody.length) return err(c.res, 400, "empty blob");
+    const type = (String(c.req.headers["content-type"] ?? "application/octet-stream").split(";")[0].trim()) || "application/octet-stream";
+    try {
+      const meta = await hub.putBlob(c.params.space, new Uint8Array(c.rawBody), type);
+      return json(c.res, 201, { ...meta, url: `/v1/spaces/${encodeURIComponent(c.params.space)}/blobs/${meta.hash}` });
+    } catch (e) {
+      return err(c.res, 413, (e as Error).message);
+    }
+  });
+  // Download: read-gated; streamed with its stored content-type, immutable-cacheable
+  // (content-addressed) and ETag'd.
+  route("GET", "/spaces/:space/blobs/:hash", async (c) => {
+    if (!(await require(c, "read"))) return;
+    const blob = await hub.getBlob(c.params.space, c.params.hash);
+    if (!blob) return err(c.res, 404, "no such blob");
+    c.res.writeHead(200, {
+      "content-type": blob.type,
+      "content-length": String(blob.bytes.byteLength),
+      "cache-control": "private, max-age=31536000, immutable",
+      etag: `"${c.params.hash}"`,
+    });
+    c.res.end(Buffer.from(blob.bytes));
+  });
+
   const maxBody = opts.maxBodyBytes ?? 1_000_000;
+  const maxBlob = opts.maxBlobBytes ?? 25 * 1024 * 1024;
+  const isBlobUpload = (m: string | undefined, p: string) => m === "POST" && /^\/v1\/spaces\/[^/]+\/blobs\/?$/.test(p);
 
   const server = createServer(async (req, res) => {
     const url = new URL(req.url ?? "/", "http://localhost");
@@ -354,24 +387,33 @@ export function createHttpServer(hub: SpaceHub, auth: Auth, opts: HttpOptions = 
     }
     const caps = await auth.capabilities(token);
 
-    let raw = "";
+    // Buffer raw bytes (so binary blob uploads survive); blob uploads get the larger
+    // cap. JSON is parsed lazily below only for JSON-typed bodies.
+    const cap = isBlobUpload(req.method, url.pathname) ? maxBlob : maxBody;
+    const chunks: Buffer[] = [];
+    let total = 0;
     let aborted = false;
-    req.on("data", (d) => {
+    req.on("data", (d: Buffer) => {
       if (aborted) return;
-      raw += d;
-      if (raw.length > maxBody) {
+      total += d.length;
+      if (total > cap) {
         aborted = true;
         res.writeHead(413, { "content-type": "application/json" });
         res.end(JSON.stringify({ error: "request body too large", code: "payload_too_large" }));
         req.destroy();
+        return;
       }
+      chunks.push(d);
     });
     req.on("end", async () => {
       if (aborted) return;
+      const rawBody = Buffer.concat(chunks);
+      const ctype = (req.headers["content-type"] ?? "").toLowerCase();
       let body: any = undefined;
-      if (raw) {
+      // parse JSON only for JSON (or untyped) bodies — a binary upload must not 400
+      if (rawBody.length && (!ctype || ctype.includes("json"))) {
         try {
-          body = JSON.parse(raw);
+          body = JSON.parse(rawBody.toString("utf8"));
         } catch {
           return err(res, 400, "invalid json");
         }
@@ -387,7 +429,7 @@ export function createHttpServer(hub: SpaceHub, auth: Auth, opts: HttpOptions = 
           return err(res, 400, "malformed percent-encoding in path");
         }
         try {
-          return await r.handler({ req, res, url, params, body, principal, caps });
+          return await r.handler({ req, res, url, params, body, rawBody, principal, caps });
         } catch (e) {
           if (!res.headersSent) return err(res, 500, (e as Error).message);
           return;

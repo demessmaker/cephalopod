@@ -29,6 +29,35 @@ function fresh() {
   return { store, hub: new SpaceHub(store) };
 }
 
+describe("M2.5 — Obsidian importer (attachments upload)", () => {
+  it("uploads referenced attachments to the blob store and rewrites to blob URLs", async () => {
+    const vault = makeVault({ "Note.md": `An image ![[pic.png|diagram]] inline.` });
+    const png = Buffer.from([0x89, 0x50, 0x4e, 0x47, 1, 2, 3, 255, 13, 10]);
+    writeFileSync(join(vault, "pic.png"), png);
+    const { hub } = fresh();
+
+    const r = await importVault(hub, "sp", vault, { writeBack: false, attachments: "upload" });
+    expect(r.attachments).toBe(1);
+
+    const note = await hub.getNoteSnapshot("sp", (await hub.search("sp", "image"))[0].id);
+    const m = note.body.match(/!\[diagram\]\((\/v1\/spaces\/sp\/blobs\/(b_[0-9a-f]+))\)/);
+    expect(m).toBeTruthy();
+    const blob = await hub.getBlob("sp", m![2]);
+    expect(blob?.type).toBe("image/png");
+    expect([...(blob?.bytes ?? [])]).toEqual([...png]); // byte-exact, content-addressed
+  });
+
+  it("warns (and falls back to a link) when an upload target is missing", async () => {
+    const vault = makeVault({ "Note.md": `Missing ![[ghost.png]] here.` });
+    const { hub } = fresh();
+    const r = await importVault(hub, "sp", vault, { writeBack: false, attachments: "upload" });
+    expect(r.warnings.some((w) => w.includes("ghost.png"))).toBe(true);
+    const note = await hub.getNoteSnapshot("sp", (await hub.search("sp", "Missing"))[0].id);
+    expect(note.body).toContain("![ghost.png](ghost.png)"); // link fallback, no blob URL
+    expect(note.body).not.toContain("/blobs/");
+  });
+});
+
 describe("M2.5 — Obsidian importer", () => {
   it("imports files as notes with frontmatter tags/props and folder path", async () => {
     const vault = makeVault({
