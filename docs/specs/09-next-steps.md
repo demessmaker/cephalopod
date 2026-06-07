@@ -161,9 +161,13 @@ with the role — they only narrow it. Implemented:
   settled tree re-syncs as a no-op. **All filesystem writes/deletes are contained**:
   `props.path`/title are sanitized (no `..`/absolute) and every write is gated by an
   `insideVault` check (defense-in-depth vs. a tampered manifest); the manifest load is
-  corruption-tolerant and saved atomically (temp+rename). `npm run export|sync`.
-  **Verified** (`brain/test/obsidian-sync.test.ts`, 10 cases incl. round-trip
-  stability, traversal containment, and conflict-sidecar non-duplication).
+  corruption-tolerant and saved atomically (temp+rename). Export and sync share one
+  path-assignment (duplicate titles disambiguate identically, full-id fallback so 3+
+  collisions can't clobber), and the vault change-hash tolerates CRLF / trailing-
+  whitespace churn (no phantom conflicts on Windows/Obsidian). `npm run export|sync`.
+  **Verified** (`brain/test/obsidian-sync.test.ts`, 12 cases incl. round-trip
+  stability, traversal containment, conflict-sidecar non-duplication, duplicate-title
+  disambiguation, and CRLF tolerance).
 - **D — remaining:** attachments/blob store, VS Code plugin, Rust arm.
 - **E — Ops:** full-stack `docker-compose` (brain + web), metrics/tracing,
   backup/restore tooling, `ARCHITECTURE.md`, open the PR.

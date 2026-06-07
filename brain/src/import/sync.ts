@@ -8,8 +8,8 @@ import { readdirSync, lstatSync, readFileSync, writeFileSync, existsSync, mkdirS
 import { join, relative, sep, dirname, basename } from "node:path";
 import type { SpaceHub, NoteSnapshot, NoteFields } from "../hub.js";
 import { parseFrontmatter, withCephalopodId } from "./frontmatter.js";
-import { serializeNote, asTags, notePath, insideVault, type SerializeOptions } from "./markdown.js";
-import { hashOf, loadSyncManifest, saveSyncManifest, snapshotSpace, type SyncManifest } from "./export.js";
+import { serializeNote, asTags, insideVault, type SerializeOptions } from "./markdown.js";
+import { hashOf, vaultHashOf, assignPaths, loadSyncManifest, saveSyncManifest, snapshotSpace, type SyncManifest } from "./export.js";
 
 export interface SyncOptions extends SerializeOptions {
   includeDrafts?: boolean;
@@ -73,13 +73,16 @@ export async function syncVault(hub: SpaceHub, space: string, vaultPath: string,
     const { data, body } = parseFrontmatter(content);
     const title = basename(full, ".md");
     const id = (typeof data.cephalopod_id === "string" ? data.cephalopod_id : undefined) ?? relToId.get(rel) ?? pathId(rel);
-    vaultById.set(id, { rel, full, content, body, data, hash: hashOf(content), title, id });
+    vaultById.set(id, { rel, full, content, body, data, hash: vaultHashOf(content), title, id });
   }
 
   // ---- gather brain notes (by id) + id->title for link rewriting ----
   const { notes, idToTitle } = await snapshotSpace(hub, space, opts.includeDrafts ?? false);
   const brainById = new Map<string, NoteSnapshot>();
   for (const n of notes) brainById.set(n.id, n);
+  // shared with export so a note always maps to the same file (and duplicate titles
+  // disambiguate identically) — otherwise sync could overwrite one note with another
+  const brainRels = assignPaths(notes, report.warnings);
 
   const next: SyncManifest = {};
   const ids = new Set([...brainById.keys(), ...vaultById.keys()]);
@@ -115,18 +118,18 @@ export async function syncVault(hub: SpaceHub, space: string, vaultPath: string,
             await tagConflict(hub, space, b);
           }
           report.exported++;
-          report.warnings.push(`conflict on "${b.title}" — brain kept, vault copy in ${basename(v.rel).replace(/\.md$/, ".conflict.md")}`);
-          next[id] = { rel: v.rel, vaultHash: hashOf(brainMd!), brainHash: brainHash! };
+          report.warnings.push(`conflict on "${b.title}" — brain kept, vault copy under .cephalopod/conflicts/${v.rel}`);
+          next[id] = { rel: v.rel, vaultHash: vaultHashOf(brainMd!), brainHash: brainHash! };
         }
       } else if (vaultChanged) {
         if (!opts.dryRun) await applyToBrain(hub, space, b, v, false);
         report.imported++;
         next[id] = await remanifest(hub, space, id, v.rel, v.content, idToTitle, opts);
       } else if (brainChanged) {
-        const rel = notePath(b);
+        const rel = brainRels.get(id)!;
         if (!opts.dryRun) writeFile(vaultPath, rel, brainMd!, prev?.rel, v.rel);
         report.exported++;
-        next[id] = { rel, vaultHash: hashOf(brainMd!), brainHash: brainHash! };
+        next[id] = { rel, vaultHash: vaultHashOf(brainMd!), brainHash: brainHash! };
       } else {
         report.unchanged++;
         next[id] = prev ?? { rel: v.rel, vaultHash: v.hash, brainHash: brainHash! };
@@ -151,10 +154,10 @@ export async function syncVault(hub: SpaceHub, space: string, vaultPath: string,
 
     // brain-only: a note with no vault file (new note, or file deleted) -> write the file
     if (b && !v) {
-      const rel = notePath(b);
+      const rel = brainRels.get(id)!;
       if (!opts.dryRun) writeFile(vaultPath, rel, brainMd!, prev?.rel, undefined);
       report.exported++;
-      next[id] = { rel, vaultHash: hashOf(brainMd!), brainHash: brainHash! };
+      next[id] = { rel, vaultHash: vaultHashOf(brainMd!), brainHash: brainHash! };
     }
   }
 
@@ -195,5 +198,5 @@ async function remanifest(hub: SpaceHub, space: string, id: string, rel: string,
   const snap = await hub.getNoteSnapshot(space, id);
   idToTitle.set(id, snap.title);
   const md = serializeNote(snap, idToTitle, opts);
-  return { rel, vaultHash: hashOf(finalVaultContent), brainHash: hashOf(md) };
+  return { rel, vaultHash: vaultHashOf(finalVaultContent), brainHash: hashOf(md) };
 }
