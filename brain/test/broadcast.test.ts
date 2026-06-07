@@ -70,9 +70,9 @@ describe("cross-instance fan-out (relay sharding)", () => {
   it("dedups a redelivered message (a flaky broker won't double-fan to clients)", async () => {
     const store = new SqliteStore(":memory:");
     const aMsgs: BroadcastMsg[] = [];
-    const aBc: Broadcaster = { id: "A", publish: (m) => aMsgs.push(m as BroadcastMsg), subscribe: () => () => {} };
+    const aBc: Broadcaster = { id: "A", publish: (m) => { aMsgs.push(m as BroadcastMsg); }, subscribe: () => () => {} };
     let bHandler: ((m: BroadcastMsg) => void) | undefined;
-    const bBc: Broadcaster = { id: "B", publish: () => {}, subscribe: (h) => ((bHandler = h), () => (bHandler = undefined)) };
+    const bBc: Broadcaster = { id: "B", publish: () => {}, subscribe: (h) => { bHandler = h; return () => { bHandler = undefined; }; } };
     const hubA = new SpaceHub(store, { broadcaster: aBc });
     const hubB = new SpaceHub(store, { broadcaster: bBc });
 
