@@ -81,6 +81,7 @@ export interface Store {
   hasBlob(space: string, hash: string): boolean;
   deleteBlob(space: string, hash: string): void;
   blobBytes(space: string): number; // total stored blob bytes in a space (for quota)
+  listBlobHashes(space: string): string[]; // all stored blob hashes (for mark-and-sweep GC)
 
   // --- destructive admin op (05 §5) ---
   purgeNote(space: string, id: string): void; // expunge from log, snapshots, index, search, embeddings

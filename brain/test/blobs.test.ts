@@ -112,6 +112,46 @@ describe("blob store HTTP API", () => {
   });
 });
 
+describe("blob GC (mark-and-sweep)", () => {
+  it("reclaims orphaned blobs but keeps ones referenced by a live note", async () => {
+    const s = new SqliteStore(":memory:");
+    const auth2 = new Auth(s);
+    const hub2 = new SpaceHub(s);
+    const tok = (await auth2.bootstrapAdmin())!.token;
+    const v = await auth2.createPrincipal("user", "v");
+    const vtok = await auth2.issueToken(v.id);
+    const srv = createHttpServer(hub2, auth2);
+    await new Promise<void>((r) => srv.listen(0, r));
+    const p = (srv.address() as any).port;
+    const call = (method: string, path: string, token: string, body?: unknown, type = "application/json") =>
+      fetch(`http://localhost:${p}/v1${path}`, { method, headers: { authorization: `Bearer ${token}`, "content-type": type }, body: body as any });
+    const upl = (bytes: Uint8Array) => call("POST", "/spaces/gc/blobs", tok, bytes, "image/png").then((r) => r.json());
+
+    await call("POST", "/spaces", tok, JSON.stringify({ name: "gc" }));
+    await call("POST", "/spaces/gc/members", tok, JSON.stringify({ principalId: v.id, role: "viewer" }));
+
+    const keep = await upl(new Uint8Array([1, 2, 3]));
+    const orphan = await upl(new Uint8Array([4, 5, 6, 7]));
+    expect(keep.hash).not.toBe(orphan.hash);
+
+    // a live note references the `keep` blob in its body markdown
+    await call("POST", "/spaces/gc/notes", tok, JSON.stringify({ title: "Doc", body: `see ![](/v1/spaces/gc/blobs/${keep.hash})` }));
+
+    expect((await call("POST", "/spaces/gc/blobs/gc", vtok)).status).toBe(403); // non-admin can't GC
+
+    const res = await (await call("POST", "/spaces/gc/blobs/gc", tok)).json();
+    expect(res).toEqual({ scanned: 2, deleted: 1, kept: 1 });
+    expect((await call("GET", `/spaces/gc/blobs/${orphan.hash}`, tok)).status).toBe(404); // orphan reclaimed
+    expect((await call("GET", `/spaces/gc/blobs/${keep.hash}`, tok)).status).toBe(200); // referenced kept
+
+    // a second GC with nothing to collect is a no-op
+    expect(await (await call("POST", "/spaces/gc/blobs/gc", tok)).json()).toEqual({ scanned: 1, deleted: 0, kept: 1 });
+
+    srv.close();
+    s.close();
+  });
+});
+
 describe("per-space blob budget", () => {
   it("rejects uploads past the space budget with 507 (dedupe exempt)", async () => {
     const store2 = new SqliteStore(":memory:");

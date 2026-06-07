@@ -177,9 +177,12 @@ See [05-security](docs/specs/05-security.md). Principals (`user`/`agent`), hashe
 ## 7. Attachments (blob store)
 
 Content-addressed (blake3), **per-space** blobs behind the `Store` contract
-(`putBlob`/`getBlob`/`hasBlob`/`deleteBlob`/`blobBytes`). `POST /spaces/:s/blobs`
-(write-gated, returns `{hash,size,type,url}`), `GET` (read-gated, byte-exact), admin
-`DELETE`. Downloads are **XSS-hardened**: the stored content-type is honored only for
+(`putBlob`/`getBlob`/`hasBlob`/`deleteBlob`/`blobBytes`/`listBlobHashes`). `POST
+/spaces/:s/blobs` (write-gated, returns `{hash,size,type,url}`), `GET` (read-gated,
+byte-exact), admin `DELETE` (one hash) and admin `POST /spaces/:s/blobs/gc`
+(**mark-and-sweep**: reclaims blobs no live note references — note delete/purge
+doesn't touch the dedupe-shared blobs, so GC is the safe reclamation path).
+Downloads are **XSS-hardened**: the stored content-type is honored only for
 an inline-safe image allowlist (SVG excluded), everything else is `attachment` +
 `octet-stream`, always with `nosniff`. A per-space **blob budget** bounds disk use. The
 Obsidian importer's `upload` mode stores referenced files and rewrites `![[img]]` →

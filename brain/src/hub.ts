@@ -572,6 +572,31 @@ export class SpaceHub {
     return this.store.deleteBlob(space, hash);
   }
 
+  // Mark-and-sweep blob GC: delete every stored blob whose hash isn't referenced by
+  // any live note in the space (notes reference blobs as `…/blobs/<hash>` in their
+  // body markdown). Blobs are dedupe-shared and note delete/purge doesn't touch them,
+  // so this is the safe way to reclaim orphans. Conservative — a hash appearing
+  // anywhere in a note's title/body/props keeps the blob (we over-keep, never
+  // over-delete). Admin-only; O(notes) — an occasional maintenance op, not per-write.
+  async gcBlobs(space: string): Promise<{ scanned: number; deleted: number; kept: number }> {
+    const referenced = new Set<string>();
+    const BLOB_REF = /b_[0-9a-f]{6,}/g;
+    for (const n of await this.store.listNodes(space, 1_000_000_000, true, [])) {
+      const snap = await this.getNoteSnapshot(space, n.id);
+      const text = `${snap.title}\n${snap.body}\n${JSON.stringify(snap.props)}`;
+      for (const m of text.matchAll(BLOB_REF)) referenced.add(m[0]);
+    }
+    const hashes = await this.store.listBlobHashes(space);
+    let deleted = 0;
+    for (const h of hashes) {
+      if (!referenced.has(h)) {
+        await this.store.deleteBlob(space, h);
+        deleted++;
+      }
+    }
+    return { scanned: hashes.length, deleted, kept: hashes.length - deleted };
+  }
+
   // Hard purge (05 §5): expunge a note everywhere + evict from memory.
   purgeNote(space: string, note: string): Promise<void> {
     return this.withDocLock(docKey(space, note), async () => {

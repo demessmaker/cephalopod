@@ -364,6 +364,9 @@ export class PgStore implements AsyncStore {
   async blobBytes(space: string): Promise<number> {
     return Number((await this.one("SELECT COALESCE(SUM(size),0) AS n FROM blobs WHERE space=$1", [space]))?.n ?? 0);
   }
+  async listBlobHashes(space: string): Promise<string[]> {
+    return (await this.q("SELECT hash FROM blobs WHERE space=$1", [space])).rows.map((r) => r.hash);
+  }
 
   async close(): Promise<void> {
     await this.db.close?.();

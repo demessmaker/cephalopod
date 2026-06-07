@@ -375,8 +375,13 @@ export function createHttpServer(hub: SpaceHub, auth: Auth, opts: HttpOptions = 
     });
     c.res.end(Buffer.from(blob.bytes));
   });
-  // Admin: delete a blob (wires store.deleteBlob; blobs are dedupe-shared by hash, so
-  // this is manual reclamation — full ref-counted GC is a follow-up).
+  // Admin: reclaim orphaned blobs (mark-and-sweep over live note references). Blobs
+  // are dedupe-shared and note delete/purge doesn't touch them, so run this to GC.
+  route("POST", "/spaces/:space/blobs/gc", async (c) => {
+    if (!(await require(c, "admin"))) return;
+    return json(c.res, 200, await hub.gcBlobs(c.params.space));
+  });
+  // Admin: delete a single blob by hash (targeted reclamation; `gc` does it in bulk).
   route("DELETE", "/spaces/:space/blobs/:hash", async (c) => {
     if (!(await require(c, "admin"))) return;
     await hub.deleteBlob(c.params.space, c.params.hash);
