@@ -61,6 +61,20 @@ describe("SpaceHub.getContext", () => {
     expect(withDrafts.items.find((i) => i.id === "n_d")).toBeDefined();
   });
 
+  it("does not leak a LINKED draft's body via 1-hop expansion unless includeDrafts is set", async () => {
+    const h = hub();
+    await h.createNote(S, { title: "Public design", body: "Postgres storage design." }, "n_pub");
+    await h.createNote(S, { title: "Secret draft", body: "unpublished agent draft content.", tags: ["draft"] }, "n_sec");
+    await h.linkNote(S, "n_pub", "n_sec", "references"); // the draft is a 1-hop neighbor of the match, not a search hit
+
+    const hidden = await h.getContext(S, "Postgres", { mode: "text", hops: 1 });
+    expect(hidden.items.find((i) => i.id === "n_pub")).toBeDefined(); // the match is packed
+    expect(hidden.items.find((i) => i.id === "n_sec")).toBeUndefined(); // linked draft is NOT leaked by default
+
+    const shown = await h.getContext(S, "Postgres", { mode: "text", hops: 1, includeDrafts: true });
+    expect(shown.items.find((i) => i.id === "n_sec")).toBeDefined(); // visible only when explicitly requested
+  });
+
   it("returns an empty pack when nothing matches", async () => {
     const h = hub();
     await h.createNote(S, { title: "Unrelated", body: "Nothing to see." }, "n_u");

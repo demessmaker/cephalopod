@@ -594,6 +594,11 @@ export class SpaceHub {
     for (const id of candidates) {
       const sum = summaries.get(id)!;
       if (sum.stub) continue; // stubs are unresolved link targets — no body to pack
+      // The seed search drops drafts when not requested, but the 1-hop expansion
+      // pulls in draft neighbors via the edge index — skip them here too, or an
+      // agent would see un-promoted draft bodies by default (the draft-gate). Uses
+      // the summary's tags so a hidden draft isn't even loaded.
+      if (!includeDrafts && sum.tags.includes("draft")) continue;
       const snap = await this.getNoteSnapshot(space, id);
       if (snap.deleted) continue;
       const fixedCost = estTokens(snap.title) + OVERHEAD;
@@ -609,7 +614,7 @@ export class SpaceHub {
       if (bodyTokenRoom > 0 || items.length === 0) {
         const body = snap.body.slice(0, Math.max(0, bodyTokenRoom) * 4);
         items.push(await this.contextItem(space, { ...snap, body }, sum, relevance.get(id)!, body.length < snap.body.length));
-        used = tokenBudget;
+        used += fixedCost + estTokens(body); // actual clipped cost (≤ budget), not the whole budget
       }
       truncated = true;
       break; // budget is spent
