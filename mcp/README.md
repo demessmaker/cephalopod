@@ -10,7 +10,10 @@ one space.
 
 ## Status — M4 + M4.1 done
 
-- ✅ Nine agent **tools** (`03 §4.1`), verified end-to-end against a real brain.
+- ✅ Ten agent **tools** (`03 §4.1`), verified end-to-end against a real brain —
+  including `get_context`, a composed retrieval primitive that returns a
+  token-budgeted bundle (hybrid search + 1-hop graph expansion, with provenance)
+  so an agent grounds an answer in one call.
 - ✅ **Title-or-id ergonomics**: tools accept a note title *or* id and resolve it
   (returning the chosen id), per `03 §4`.
 - ✅ Writes go through the brain's HTTP → hub commit path, so agent edits converge
@@ -29,6 +32,7 @@ one space.
 | Tool | Args | Returns |
 |------|------|---------|
 | `search` | `query`, `limit?` | ranked notes |
+| `get_context` | `query`, `tokenBudget?`, `mode?`, `hops?`, `tags?`, `drafts?` | token-budgeted bundle: hits + 1-hop neighbors, with provenance |
 | `get_note` | `note` (id/title) | full note + links |
 | `create_note` | `title`, `body?`, `tags?`, `props?` | `{ id }` |
 | `update_note` | `note`, `title?`/`body?`/`tags?`/`props?` | new state |

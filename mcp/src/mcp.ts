@@ -36,6 +36,24 @@ export function buildServer(client: CephalopodClient, opts: { socket?: BrainSock
   );
 
   server.registerTool(
+    "get_context",
+    {
+      description:
+        "Assemble the best context bundle for a question under a token budget — hybrid search plus a 1-hop graph expansion around the hits, deduped and ranked, each note stamped with provenance (author, draft state, last editor). Prefer this over stitching search + get_note when you need to ground an answer in team memory: it returns ready-to-use note bodies (the last one clipped to fit) instead of just ids.",
+      inputSchema: {
+        query: z.string().min(1),
+        tokenBudget: z.number().int().positive().optional().describe("approx token cap for the bundle (default 2000)"),
+        mode: z.enum(["text", "semantic", "hybrid"]).optional().describe("seed search mode (default hybrid)"),
+        hops: z.number().int().min(0).max(3).optional().describe("graph expansion radius around the hits (default 1)"),
+        tags: z.array(z.string()).optional().describe("restrict to notes carrying these facet tags"),
+        drafts: z.boolean().optional().describe("include #draft (agent-authored, un-promoted) notes"),
+      },
+    },
+    async ({ query, tokenBudget, mode, hops, tags, drafts }) =>
+      ok(await client.getContext(query, { tokenBudget, mode, hops, tags, drafts })),
+  );
+
+  server.registerTool(
     "get_note",
     {
       description: "Read a note's full content + metadata + outgoing links. Accepts a note id or a title.",

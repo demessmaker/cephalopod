@@ -19,7 +19,7 @@ offline, and stream conflict-free **deltas** back.
 |---------|------|
 | **`core/`** | Single source of truth shared by `brain` + `arm`: note schema (`note.ts`), ids (`ids.ts`), wikilink derivation (`wikilinks.ts`), wire protocol (`protocol.ts`). Brain/arm re-export it via thin `src/core/*` shims. |
 | **`brain/`** | The server. Owns authoritative Y.Docs, the append-only log + snapshots, the derived graph index, search, auth, the HTTP API, the WS sync relay, blob store, importer/exporter, and ops endpoints. |
-| **`mcp/`** | Model Context Protocol server — the agent-facing surface: tools (`create_note`, `search`, `neighbors`, …), note **resources** with live `resources/updated` subscriptions, and guided **prompts**. Talks to the brain over HTTP+WS with an agent token. |
+| **`mcp/`** | Model Context Protocol server — the agent-facing surface: tools (`create_note`, `search`, `get_context`, `neighbors`, …), note **resources** with live `resources/updated` subscriptions, and guided **prompts**. Talks to the brain over HTTP+WS with an agent token. |
 | **`arm/`** | A developer's local replica (CLI): offline disk cache, edit-offline → reconnect → sync, pull-a-scope. The reference Yjs client the browser editor mirrors. |
 | **`web/`** | Build-less graph explorer: search → force-directed subgraph → click-to-expand → live refresh, plus in-browser collaborative editing (Yjs + presence). Serves static assets and reverse-proxies `/v1` to the brain. |
 | **`vscode/`** | VS Code extension. Notes open as live markdown buffers via a virtual file system (`cephalopod:/<id>.md`); a pure `EditorSession` (no `vscode` dependency) syncs them over the same WS handshake as the arm, mapping each save to a minimal `Y.Text` edit. The editor glue (FS provider, Explorer tree, status bar, commands) is a thin layer over it. |
@@ -120,8 +120,10 @@ local edits emit `update` deltas, applied remotely with origin tracking to avoid
 
 ### 4.2 HTTP API (`brain/src/http.ts`)
 
-`/v1/spaces/...` for spaces, notes, search, neighbors, query, tags, revert, purge, and
-**blobs**. Every route is ACL-checked; auth + rate-limit run **before** body buffering.
+`/v1/spaces/...` for spaces, notes, search, **context** (a token-budgeted retrieval
+bundle — hybrid search + 1-hop graph expansion, packed with provenance), neighbors,
+query, tags, revert, purge, and **blobs**. Every route is ACL-checked; auth +
+rate-limit run **before** body buffering.
 Bodies are buffered as raw bytes (binary-safe) and JSON-parsed only for JSON types.
 Unauthenticated `/healthz` and `/metrics`.
 

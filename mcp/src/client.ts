@@ -13,6 +13,15 @@ export interface NoteSnapshot {
 export interface NodeSummary { id: string; title: string; tags: string[]; stub: boolean }
 export interface EdgeRec { from: string; to: string; type: string | null; origin: string }
 export interface Subgraph { nodes: NodeSummary[]; edges: EdgeRec[] }
+export interface ContextItem {
+  id: string; title: string; tags: string[]; stub: boolean; body: string;
+  relevance: "match" | "linked"; truncated?: boolean;
+  provenance: { authoredBy: string; draft: boolean; lastEditedBy?: string; lastEditedAt?: number };
+}
+export interface ContextPack {
+  query: string; items: ContextItem[]; edges: EdgeRec[];
+  tokenBudget: number; usedTokens: number; truncated: boolean;
+}
 
 export class CephalopodClient {
   constructor(
@@ -41,6 +50,9 @@ export class CephalopodClient {
   }
   getNote(id: string): Promise<NoteSnapshot> {
     return this.req("GET", this.s(`/notes/${encodeURIComponent(id)}`));
+  }
+  getContext(query: string, opts: { tokenBudget?: number; mode?: string; hops?: number; tags?: string[]; drafts?: boolean } = {}): Promise<ContextPack> {
+    return this.req("POST", this.s(`/context`), { query, ...opts });
   }
   createNote(fields: { title?: string; body?: string; tags?: string[]; props?: Record<string, unknown> }): Promise<{ id: string }> {
     return this.req("POST", this.s(`/notes`), fields);

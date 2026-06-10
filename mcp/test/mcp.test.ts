@@ -63,7 +63,7 @@ describe("M4 MCP server", () => {
     const { tools } = await mcp.listTools();
     const names = tools.map((t) => t.name).sort();
     expect(names).toEqual(
-      ["create_note", "get_note", "link_notes", "list_spaces", "neighbors", "query_graph", "search", "unlink_notes", "update_note"].sort(),
+      ["create_note", "get_context", "get_note", "link_notes", "list_spaces", "neighbors", "query_graph", "search", "unlink_notes", "update_note"].sort(),
     );
   });
 
@@ -96,6 +96,19 @@ describe("M4 MCP server", () => {
     expect(linked.isError).toBe(false);
     const nb = await call("neighbors", { note: "Billing Service", hops: 1, dir: "in" });
     expect(nb.data.edges.some((e: any) => e.type === "calls")).toBe(true);
+  });
+
+  it("get_context bundles a hit + its linked neighbor, with provenance, skipping stubs", async () => {
+    const ctx = await call("get_context", { query: "charges", mode: "text", hops: 1 });
+    const titles = ctx.data.items.map((i: any) => i.title);
+    expect(titles).toContain("Billing Service"); // direct match
+    const hit = ctx.data.items.find((i: any) => i.title === "Billing Service");
+    expect(hit.relevance).toBe("match");
+    expect(hit.provenance).toHaveProperty("authoredBy"); // stamped
+    expect(titles).toContain("Auth Service"); // pulled in by 1-hop expansion (calls → Billing)
+    expect(ctx.data.items.some((i: any) => i.stub)).toBe(false); // the Payments Gateway stub is not packed
+    expect(ctx.data.tokenBudget).toBe(2000); // default budget
+    expect(ctx.data.usedTokens).toBeGreaterThan(0);
   });
 
   it("update_note edits content", async () => {

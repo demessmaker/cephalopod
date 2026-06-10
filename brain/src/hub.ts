@@ -74,6 +74,38 @@ export interface NoteSnapshot {
   deleted: boolean;
 }
 
+// A token-budgeted bundle of the most relevant notes for a query, ready to drop
+// into an agent's context window. `match` items are direct search hits; `linked`
+// items were pulled in by 1-hop graph expansion around the hits (03 §4 — the
+// composed retrieval primitive so agents don't hand-stitch search + get_note).
+export interface ContextItem {
+  id: string;
+  title: string;
+  tags: string[];
+  stub: boolean;
+  body: string;
+  relevance: "match" | "linked";
+  truncated?: boolean; // body was clipped to fit the remaining budget
+  provenance: { authoredBy: string; draft: boolean; lastEditedBy?: string; lastEditedAt?: number };
+}
+export interface ContextPack {
+  query: string;
+  items: ContextItem[];
+  edges: EdgeRec[]; // links among the included notes (the local structure)
+  tokenBudget: number;
+  usedTokens: number;
+  truncated: boolean; // some candidate content was clipped or dropped to fit
+}
+
+export interface ContextOptions {
+  tokenBudget?: number; // ~4 chars/token heuristic; default 2000
+  mode?: SearchMode; // default "hybrid"
+  hops?: number; // graph expansion radius around the hits; default 1
+  includeDrafts?: boolean;
+  tagFilters?: string[];
+  seeds?: number; // how many search hits to seed expansion from; default 8
+}
+
 interface DocState {
   doc: Y.Doc;
   lastSeq: number; // seq of the most recent persisted update
@@ -510,6 +542,116 @@ export class SpaceHub {
   private async nodesFor(space: string, ids: string[]): Promise<NodeSummary[]> {
     const nodes = await Promise.all(ids.map((id) => this.store.getNode(space, id)));
     return nodes.filter(Boolean) as NodeSummary[];
+  }
+
+  // Assemble the best context bundle for `query` under a token budget: hybrid
+  // search seeds it, a 1-hop graph expansion around the hits adds linked context,
+  // and notes are packed in relevance order (direct hits first, then neighbors by
+  // how tightly they connect to the hits) until the budget is spent. The last note
+  // that doesn't fully fit is body-truncated rather than dropped, so a single huge
+  // note can't starve the pack. Each note carries provenance (author, draft state,
+  // last editor) so the caller can weight or filter agent-authored content.
+  async getContext(space: string, query: string, opts: ContextOptions = {}): Promise<ContextPack> {
+    const tokenBudget = Math.max(1, opts.tokenBudget ?? 2000);
+    const hops = Math.max(0, opts.hops ?? 1);
+    const seedLimit = Math.max(1, opts.seeds ?? 8);
+    const includeDrafts = opts.includeDrafts ?? false;
+    const tagFilters = opts.tagFilters ?? [];
+
+    // 1. seed with ranked search hits (these are the direct matches)
+    const seeds = await this.searchMode(space, query, opts.mode ?? "hybrid", seedLimit, includeDrafts, tagFilters);
+    const seedIds = seeds.map((n) => n.id);
+    const summaries = new Map<string, NodeSummary>(seeds.map((n) => [n.id, n]));
+    const relevance = new Map<string, "match" | "linked">(seedIds.map((id) => [id, "match"]));
+
+    // 2. expand one hop around the hits; rank neighbors by adjacency to the hits
+    let edges: EdgeRec[] = [];
+    if (seedIds.length && hops > 0) {
+      const scope = await this.resolveScope(space, { focus: seedIds, hops, dir: "both" });
+      edges = scope.edges;
+      for (const n of scope.nodes) if (!summaries.has(n.id)) summaries.set(n.id, n);
+      const seedSet = new Set(seedIds);
+      const proximity = new Map<string, number>();
+      for (const e of edges) {
+        for (const [a, b] of [[e.from, e.to], [e.to, e.from]] as const) {
+          if (seedSet.has(a) && !seedSet.has(b)) proximity.set(b, (proximity.get(b) ?? 0) + 1);
+        }
+      }
+      const neighbors = [...summaries.keys()].filter((id) => !seedSet.has(id));
+      neighbors.sort((a, b) => (proximity.get(b) ?? 0) - (proximity.get(a) ?? 0));
+      for (const id of neighbors) relevance.set(id, "linked");
+    }
+
+    // 3. candidates in rank order: matches first (search order), then neighbors
+    const candidates = [...seedIds, ...[...relevance.keys()].filter((id) => relevance.get(id) === "linked")];
+
+    // 4. pack until the budget is spent; clip the first overflowing note, drop the rest
+    const estTokens = (s: string) => Math.ceil(s.length / 4);
+    const OVERHEAD = 16; // rough per-item cost for title + tags + provenance framing
+    const items: ContextItem[] = [];
+    let used = 0;
+    let truncated = false;
+    for (const id of candidates) {
+      const sum = summaries.get(id)!;
+      if (sum.stub) continue; // stubs are unresolved link targets — no body to pack
+      const snap = await this.getNoteSnapshot(space, id);
+      if (snap.deleted) continue;
+      const fixedCost = estTokens(snap.title) + OVERHEAD;
+      const fullCost = fixedCost + estTokens(snap.body);
+      if (used + fullCost <= tokenBudget) {
+        items.push(await this.contextItem(space, snap, sum, relevance.get(id)!, false));
+        used += fullCost;
+        continue;
+      }
+      // doesn't fit whole: clip the body into whatever budget is left (always keep
+      // at least the top candidate, even if its body shrinks to nothing)
+      const bodyTokenRoom = tokenBudget - used - fixedCost;
+      if (bodyTokenRoom > 0 || items.length === 0) {
+        const body = snap.body.slice(0, Math.max(0, bodyTokenRoom) * 4);
+        items.push(await this.contextItem(space, { ...snap, body }, sum, relevance.get(id)!, body.length < snap.body.length));
+        used = tokenBudget;
+      }
+      truncated = true;
+      break; // budget is spent
+    }
+
+    const keep = new Set(items.map((i) => i.id));
+    return {
+      query,
+      items,
+      edges: edges.filter((e) => keep.has(e.from) && keep.has(e.to)),
+      tokenBudget,
+      usedTokens: used,
+      truncated,
+    };
+  }
+
+  private async contextItem(space: string, snap: NoteSnapshot, sum: NodeSummary, relevance: "match" | "linked", truncated: boolean): Promise<ContextItem> {
+    const last = await this.lastEdit(space, snap.id);
+    return {
+      id: snap.id,
+      title: snap.title,
+      tags: snap.tags,
+      stub: sum.stub,
+      body: snap.body,
+      relevance,
+      ...(truncated ? { truncated: true } : {}),
+      provenance: {
+        authoredBy: typeof snap.props.authoredBy === "string" ? snap.props.authoredBy : "human",
+        draft: snap.tags.includes("draft"),
+        lastEditedBy: last?.actor,
+        lastEditedAt: last?.ts,
+      },
+    };
+  }
+
+  // Most-recent attributed edit from the retained log tail (undefined if every
+  // edit has been folded into a snapshot — provenance there is not separable).
+  private async lastEdit(space: string, note: string): Promise<{ actor: string; ts: number } | undefined> {
+    const meta = await this.store.loadDocMeta(space, note);
+    let best: { actor: string; ts: number } | undefined;
+    for (const u of meta.updates) if (!best || u.ts >= best.ts) best = { actor: u.actor, ts: u.ts };
+    return best;
   }
   tagCounts(space: string) {
     return this.store.tagCounts(space);
