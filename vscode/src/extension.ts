@@ -146,15 +146,18 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   // disposes the VS Code objects, not the EditorSession.
   context.subscriptions.push({ dispose: () => session.disconnect() });
 
-  const connect = async () => {
+  // `manual` is true only when the user explicitly runs Reconnect. On auto-
+  // activation (every window via onStartupFinished) an unconfigured or offline
+  // workspace stays silent rather than nagging with a warning toast.
+  const connect = async (manual = false) => {
     if (!space || !token) {
-      vscode.window.showWarningMessage("Set cephalopod.space and a token (Cephalopod: Set Token) first.");
+      if (manual) vscode.window.showWarningMessage("Set cephalopod.space and a token (Cephalopod: Set Token) first.");
       return;
     }
     try {
       await session.connect();
     } catch (e) {
-      vscode.window.showWarningMessage(`Cephalopod offline: ${(e as Error).message}`);
+      if (manual) vscode.window.showWarningMessage(`Cephalopod offline: ${(e as Error).message}`);
     }
     render();
   };
@@ -172,7 +175,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     vscode.workspace.registerFileSystemProvider(SCHEME, fs, { isCaseSensitive: true }),
     vscode.window.registerTreeDataProvider("cephalopodNotes", tree),
 
-    vscode.commands.registerCommand("cephalopod.reconnect", connect),
+    vscode.commands.registerCommand("cephalopod.reconnect", () => connect(true)),
 
     vscode.commands.registerCommand("cephalopod.openNote", async (arg?: string) => {
       if (typeof arg === "string") return openNote(arg);
@@ -199,7 +202,10 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     }),
 
     vscode.commands.registerCommand("cephalopod.setTitle", async (arg?: string) => {
-      const id = arg ?? (vscode.window.activeTextEditor && idFromUri(vscode.window.activeTextEditor.document.uri));
+      // Fall back to the active editor only when it's actually a cephalopod note —
+      // otherwise idFromUri of an arbitrary file path would fabricate a phantom doc.
+      const active = vscode.window.activeTextEditor;
+      const id = arg ?? (active?.document.uri.scheme === SCHEME ? idFromUri(active.document.uri) : undefined);
       if (!id) return;
       const title = await vscode.window.showInputBox({ prompt: "Note title", value: session.title(id) });
       if (title !== undefined) session.setTitle(id, title);
