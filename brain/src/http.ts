@@ -217,10 +217,27 @@ export function createHttpServer(hub: SpaceHub, auth: Auth, opts: HttpOptions = 
     const drafts = c.url.searchParams.get("drafts") === "1";
     json(c.res, 200, { notes: await hub.listNotes(c.params.space, intParam(c.url.searchParams.get("limit"), 50, 1, 500), drafts, tagFilters(c)) });
   });
+  // Human review queue (#29): notes flagged by a gate (draft / needs-facets /
+  // secret-suspected) awaiting promotion or rejection, with provenance.
+  route("GET", "/spaces/:space/review", async (c) => {
+    if (!(await require(c, "read"))) return;
+    json(c.res, 200, { items: await hub.reviewQueue(c.params.space, intParam(c.url.searchParams.get("limit"), 100, 1, 500)) });
+  });
   route("GET", "/spaces/:space/notes/:id", async (c) => {
     if (!(await require(c, "read"))) return;
     if (!(await hub.hasNote(c.params.space, c.params.id))) return err(c.res, 404, "not found");
     json(c.res, 200, await hub.getNoteSnapshot(c.params.space, c.params.id));
+  });
+  // Attributed history / blame for a note (#30): who changed it, when, and what —
+  // newest first, with each distinct actor resolved to its principal kind.
+  route("GET", "/spaces/:space/notes/:id/history", async (c) => {
+    if (!(await require(c, "read"))) return;
+    if (!(await hub.hasNote(c.params.space, c.params.id))) return err(c.res, 404, "not found");
+    const hist = await hub.noteHistory(c.params.space, c.params.id);
+    const kinds = new Map<string, string | undefined>();
+    for (const e of hist.entries) if (!kinds.has(e.actor)) kinds.set(e.actor, (await auth.getPrincipalById(e.actor))?.kind);
+    const entries = hist.entries.map((e) => ({ ...e, kind: kinds.get(e.actor) })).reverse(); // newest first
+    json(c.res, 200, { ...hist, entries });
   });
   route("PATCH", "/spaces/:space/notes/:id", async (c) => {
     if (!(await require(c, "write"))) return;

@@ -106,6 +106,42 @@ export interface ContextOptions {
   seeds?: number; // how many search hits to seed expansion from; default 8
 }
 
+// Per-note attributed history (#30): each retained-tail delta as one entry with
+// who/when and a field-level change summary (a lightweight "blame"). Edits already
+// folded into a snapshot aren't separable, so they're not shown (`compacted`).
+export interface HistoryChange {
+  fields: string[]; // which changed: title | body | tags | props | links | deleted
+  title?: string; // new title value (when title changed)
+  bodyDelta?: number; // net character change in the body
+  tagsAdded?: string[];
+  tagsRemoved?: string[];
+}
+export interface HistoryEntry {
+  step: number; // position in the retained tail (0 = earliest un-compacted edit)
+  actor: string;
+  ts: number;
+  changes: HistoryChange;
+}
+export interface NoteHistory {
+  note: string;
+  compacted: boolean; // earlier edits were folded into a snapshot (not shown)
+  entries: HistoryEntry[];
+}
+
+// A note awaiting human review (#29): carries the gate(s) that flagged it plus
+// provenance, so the explorer can list and triage agent-authored / quarantined notes.
+export interface ReviewItem {
+  id: string;
+  title: string;
+  tags: string[];
+  gates: string[]; // which gate tags flagged it: draft | needs-facets | secret-suspected
+  authoredBy: string;
+  lastEditedBy?: string;
+  lastEditedAt?: number;
+  missingFacets: string[];
+  preview: string;
+}
+
 interface DocState {
   doc: Y.Doc;
   lastSeq: number; // seq of the most recent persisted update
@@ -810,6 +846,67 @@ export class SpaceHub {
       if (r.partial) partial.push(note);
     }
     return { reverted, partial };
+  }
+
+  // Attributed history (#30): replay the retained log tail one delta at a time and
+  // diff the reconstructed note between steps, so each entry says who edited, when,
+  // and which fields moved — a lightweight blame without storing diffs. Edits folded
+  // into a snapshot aren't separable (flagged `compacted`); reads from the durable
+  // log, so it doesn't need the live doc resident.
+  async noteHistory(space: string, note: string): Promise<NoteHistory> {
+    const { snapshot, updates } = await this.store.loadDocMeta(space, note);
+    const doc = new Y.Doc();
+    if (snapshot) Y.applyUpdate(doc, snapshot.state, "load");
+    const h = handle(note, doc);
+    const fields = () => ({ title: getTitle(h), body: h.body.toString(), tags: h.tags.toArray(), props: h.props.size, links: h.outLinks.size, deleted: !!h.meta.get("deleted") });
+    let prev = fields();
+    const entries: HistoryEntry[] = [];
+    updates.forEach((u, i) => {
+      Y.applyUpdate(doc, u.bytes, "load");
+      const cur = fields();
+      const changed: string[] = [];
+      const ch: HistoryChange = { fields: changed };
+      if (cur.title !== prev.title) { changed.push("title"); ch.title = cur.title; }
+      if (cur.body !== prev.body) { changed.push("body"); ch.bodyDelta = cur.body.length - prev.body.length; }
+      const added = cur.tags.filter((t) => !prev.tags.includes(t));
+      const removed = prev.tags.filter((t) => !cur.tags.includes(t));
+      if (added.length) ch.tagsAdded = added;
+      if (removed.length) ch.tagsRemoved = removed;
+      if (added.length || removed.length) changed.push("tags");
+      if (cur.props !== prev.props) changed.push("props");
+      if (cur.links !== prev.links) changed.push("links");
+      if (cur.deleted !== prev.deleted) changed.push("deleted");
+      entries.push({ step: i, actor: u.actor, ts: u.ts, changes: ch });
+      prev = cur;
+    });
+    return { note, compacted: !!snapshot, entries };
+  }
+
+  // Review queue (#29): notes carrying any gate tag (agent #draft, facet-less
+  // #needs-facets, #secret-suspected), with provenance + a body preview, newest
+  // first — the worklist a human triages (promote / reject).
+  async reviewQueue(space: string, limit = 100): Promise<ReviewItem[]> {
+    const GATES = ["draft", "needs-facets", "secret-suspected"];
+    const seen = new Map<string, NodeSummary>();
+    for (const tag of GATES) for (const n of await this.listNotes(space, limit, true, [tag])) seen.set(n.id, n);
+    const items: ReviewItem[] = [];
+    for (const n of seen.values()) {
+      const snap = await this.getNoteSnapshot(space, n.id);
+      if (snap.deleted) continue;
+      const last = await this.lastEdit(space, n.id);
+      items.push({
+        id: n.id,
+        title: snap.title,
+        tags: snap.tags,
+        gates: GATES.filter((g) => snap.tags.includes(g)),
+        authoredBy: typeof snap.props.authoredBy === "string" ? snap.props.authoredBy : "human",
+        lastEditedBy: last?.actor,
+        lastEditedAt: last?.ts,
+        missingFacets: await this.missingFacets(space, snap.tags),
+        preview: snap.body.slice(0, 280),
+      });
+    }
+    return items.sort((a, b) => (b.lastEditedAt ?? 0) - (a.lastEditedAt ?? 0));
   }
   // Which required facets a note (with these tags) is missing. Exempt if tagged
   // `shared`, or if the note IS a facet node (tagged with a facet key itself).
