@@ -2,6 +2,7 @@
 import { api, setCreds, liveOpen, editorTransport, creds } from "./api.js";
 import { buildGraph, layout, bounds } from "./graph.js";
 import { NoteSession, bindTextarea } from "./edit.js";
+import { reviewBadges, reviewMeta, historyLine } from "./review.js";
 
 const $ = (id) => document.getElementById(id);
 let disposeLive = () => {};
@@ -40,6 +41,48 @@ async function search() {
 $("go").onclick = search;
 $("q").addEventListener("keydown", (e) => e.key === "Enter" && search());
 
+// --- review queue (#29): gated notes awaiting human triage ---
+async function loadReview() {
+  $("results").innerHTML = `<p class="muted">Loading review queue…</p>`;
+  try {
+    const { items } = await api.review();
+    renderReview(items);
+  } catch (e) {
+    $("results").innerHTML = `<p class="muted">${esc(e.message)}</p>`;
+  }
+}
+$("review-btn").onclick = loadReview;
+
+function renderReview(items) {
+  const head = `<div class="review-head">Pending review · ${items.length}</div>`;
+  if (!items.length) { $("results").innerHTML = head + `<p class="muted">Nothing awaiting review. 🎉</p>`; return; }
+  $("results").innerHTML = head;
+  for (const it of items) {
+    const el = document.createElement("div");
+    el.className = "result review-item";
+    el.innerHTML =
+      `<div class="t">${esc(it.title || it.id)}</div>` +
+      `<div class="badges">${reviewBadges(it).map((b) => `<span class="tag gate">${esc(b)}</span>`).join("")}</div>` +
+      `<div class="muted prov">${esc(reviewMeta(it))}</div>` +
+      (it.preview ? `<div class="muted preview">${esc(it.preview)}</div>` : "") +
+      `<div class="review-actions"><button class="promote">Promote</button><button class="reject">Reject</button></div>`;
+    el.querySelector(".t").onclick = () => focusNote(it.id);
+    el.querySelector(".preview")?.addEventListener("click", () => focusNote(it.id));
+    el.querySelector(".promote").onclick = async (ev) => {
+      ev.stopPropagation();
+      try { await api.promote(it.id); await loadReview(); if (currentId === it.id) focusNote(it.id); }
+      catch (e) { alert(e.message); }
+    };
+    el.querySelector(".reject").onclick = async (ev) => {
+      ev.stopPropagation();
+      if (!confirm(`Permanently purge "${it.title || it.id}"? This cannot be undone.`)) return;
+      try { await api.purge(it.id); await loadReview(); }
+      catch (e) { alert(e.message); }
+    };
+    $("results").appendChild(el);
+  }
+}
+
 function renderResults(hits) {
   $("results").innerHTML = hits.length
     ? ""
@@ -77,10 +120,30 @@ function renderNote(n) {
   $("note").innerHTML =
     `<h1>${esc(n.title || n.id)}</h1>` +
     (n.tags?.length ? `<div>${n.tags.map((t) => `<span class="tag">${esc(t)}</span>`).join("")}</div>` : "") +
-    `<div class="note-actions"><button id="edit-toggle">✎ Edit</button> <span id="presence" class="muted"></span></div>` +
+    `<div class="note-actions"><button id="edit-toggle">✎ Edit</button> <button id="hist-toggle">⌖ History</button> <span id="presence" class="muted"></span></div>` +
     `<pre id="body-view">${esc(n.body || "(empty)")}</pre>` +
-    `<textarea id="body-edit" class="hidden" spellcheck="false"></textarea>`;
+    `<textarea id="body-edit" class="hidden" spellcheck="false"></textarea>` +
+    `<div id="history" class="hidden"></div>`;
   $("edit-toggle").onclick = () => (editor ? stopEdit(true) : startEdit(n.id));
+  $("hist-toggle").onclick = () => toggleHistory(n.id);
+}
+
+// --- per-note history / blame (#30) ---
+async function toggleHistory(id) {
+  const box = $("history");
+  if (!box.classList.contains("hidden")) { box.classList.add("hidden"); return; }
+  box.classList.remove("hidden");
+  box.innerHTML = `<p class="muted">Loading history…</p>`;
+  try {
+    const h = await api.history(id);
+    box.innerHTML =
+      (h.compacted ? `<p class="muted">Earlier edits folded into a snapshot (not shown).</p>` : "") +
+      (h.entries.length
+        ? `<ul class="history">${h.entries.map((e) => `<li>${esc(historyLine(e))}</li>`).join("")}</ul>`
+        : `<p class="muted">No retained edits.</p>`);
+  } catch (e) {
+    box.innerHTML = `<p class="muted">${esc(e.message)}</p>`;
+  }
 }
 
 // --- collaborative editing: open a CRDT session over WS, bind the textarea ---

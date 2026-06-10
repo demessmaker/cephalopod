@@ -29,7 +29,7 @@ back to the central brain.
 | [`brain/`](brain/) | M1–M2.5 ✅ | Persistent sync relay (log, snapshots, spaces, restart, derived index) + HTTP API, FTS5 search, token auth & RBAC, and an Obsidian vault importer. |
 | [`mcp/`](mcp/) | M4–M4.1 ✅ | MCP server — 10 agent tools (incl. `get_context`, a token-budgeted retrieval bundle), note **resources**, **live subscriptions** (`resources/updated`), and guided **prompts** (`capture-decision`/`onboard`); the agent-facing surface. |
 | [`arm/`](arm/) | M3 ✅ | CLI arm — a developer's local replica: offline disk cache, edit-offline→reconnect sync, pull-a-scope, two-arm convergence. |
-| [`web/`](web/) | M8 ✅ | Web graph explorer (north-star UI) — build-less: search → force-directed subgraph → click-to-expand → live refresh. |
+| [`web/`](web/) | M8 ✅ | Web graph explorer (north-star UI) — build-less: search → force-directed subgraph → click-to-expand → live refresh, a **review queue** for gated/agent notes (promote/reject), and per-note **history/blame**. |
 | [`vscode/`](vscode/) | M9 ✅ | VS Code extension — notes as live, CRDT-synced markdown buffers (virtual FS), Explorer tree, offline queue; same relay handshake as the arm. |
 
 ### Quickstart (self-host)

@@ -122,8 +122,9 @@ local edits emit `update` deltas, applied remotely with origin tracking to avoid
 
 `/v1/spaces/...` for spaces, notes, search, **context** (a token-budgeted retrieval
 bundle — hybrid search + 1-hop graph expansion, packed with provenance), neighbors,
-query, tags, revert, purge, and **blobs**. Every route is ACL-checked; auth +
-rate-limit run **before** body buffering.
+query, tags, **history** (per-note attributed blame from the log tail), **review**
+(the gated-note queue), revert, purge, and **blobs**. Every route is ACL-checked;
+auth + rate-limit run **before** body buffering.
 Bodies are buffered as raw bytes (binary-safe) and JSON-parsed only for JSON types.
 Unauthenticated `/healthz` and `/metrics`.
 
@@ -214,6 +215,13 @@ renders a force-directed subgraph; an **Edit** toggle opens a CRDT `NoteSession`
 (mirroring the arm's handshake) bound to a `<textarea>` via a surrogate-safe minimal
 diff, with a live **presence** bar driven by the ephemeral `awareness` relay. The
 server (`serve.mjs`, pure Node stdlib) serves assets and proxies `/v1` to the brain.
+
+A **⚑ Review** worklist (`/review`) lists gated notes — agent `#draft`,
+`#needs-facets`, `#secret-suspected` — with provenance and a preview, and
+**Promote**/**Reject** (purge) actions, closing the human half of the agent
+draft-gate loop. Each note also has a **⌖ History** panel (`/notes/:id/history`):
+an attributed, newest-first blame reconstructed from the log tail. The display
+shaping (`review.js`) is a `vscode`-free, unit-tested seam; `app.js` only renders it.
 
 ### 9.1 VS Code extension (`vscode/`)
 
