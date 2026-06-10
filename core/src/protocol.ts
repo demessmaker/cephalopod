@@ -54,3 +54,9 @@ export const b64 = {
 };
 
 export const docKey = (space: string, note: string) => `${space} ${note}`;
+// Inverse of docKey. Note ids never contain a space (`n_<hex>`), so the separator
+// is the LAST space — split there, since a *space name* may itself contain spaces.
+export const splitDocKey = (key: string): [string, string] => {
+  const i = key.lastIndexOf(" ");
+  return [key.slice(0, i), key.slice(i + 1)];
+};
