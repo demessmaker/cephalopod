@@ -1,6 +1,6 @@
 // Identity, tokens, and role-based access control (05 §1–2). Tokens are random
-// secrets; only their hash is stored. Roles are per-space; capability scoping
-// (tag/path) is deferred (05 §2.2, OQ).
+// secrets; only their hash is stored. Roles are per-space; per-token capability
+// scoping (read-only / write-tag / path prefix — N3) intersects with the role.
 import { randomBytes } from "node:crypto";
 import { blake3 } from "@noble/hashes/blake3";
 import { bytesToHex, utf8ToBytes } from "@noble/hashes/utils";

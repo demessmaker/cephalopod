@@ -70,4 +70,15 @@ describe("resident docs are LRU-bounded", () => {
     // search still finds evicted content (derived index is durable)
     expect((await hub.search("kb", "body")).length).toBeGreaterThan(0);
   });
+
+  it("snapshots under the correct key when a space name contains a space (docKey split)", async () => {
+    const store = new SqliteStore(":memory:");
+    const hub = new SpaceHub(store, { maxLoadedDocs: 1 }); // tiny cap → loading the 2nd note evicts the 1st
+    await hub.createNote("my space", { title: "A", body: "hello" }, "n_a");
+    await hub.createNote("my space", { title: "B", body: "world" }, "n_b"); // evicts + snapshots n_a
+
+    // the eviction snapshot must land under ("my space","n_a"), not a mis-split phantom key
+    expect(store.loadDoc("my space", "n_a").snapshot).toBeDefined();
+    expect((await hub.getNoteSnapshot("my space", "n_a")).body).toBe("hello"); // intact on reload
+  });
 });

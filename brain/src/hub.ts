@@ -14,6 +14,7 @@ import { edgeId, stubId, newNoteId } from "./core/ids.js";
 import {
   b64,
   docKey,
+  splitDocKey,
   type ClientMsg,
   type ServerMsg,
   type Conn,
@@ -225,7 +226,7 @@ export class SpaceHub {
       const oldest = this.docs.keys().next().value as string | undefined;
       if (oldest === undefined || oldest === keep) break;
       const st = this.docs.get(oldest)!;
-      const [s, n] = oldest.split(" ");
+      const [s, n] = splitDocKey(oldest);
       if (st.lastSeq > 0 && st.sinceSnap > 0) await this.snapshot(s, n, st);
       this.docs.delete(oldest);
     }
@@ -579,6 +580,12 @@ export class SpaceHub {
   // anywhere in a note's title/body/props keeps the blob (we over-keep, never
   // over-delete). Admin-only; O(notes) — an occasional maintenance op, not per-write.
   async gcBlobs(space: string): Promise<{ scanned: number; deleted: number; kept: number }> {
+    // Snapshot the candidate set FIRST, then scan references. A blob uploaded
+    // concurrently (after this list) isn't a candidate, so the scan can't race it
+    // into deletion before its note lands — only blobs that existed at GC start can
+    // be reclaimed. (Residual: a note created mid-scan that references a *pre-existing*
+    // orphan can still be missed; run GC during a quiet window.)
+    const hashes = await this.store.listBlobHashes(space);
     const referenced = new Set<string>();
     const BLOB_REF = /b_[0-9a-f]{6,}/g;
     for (const n of await this.store.listNodes(space, 1_000_000_000, true, [])) {
@@ -586,7 +593,6 @@ export class SpaceHub {
       const text = `${snap.title}\n${snap.body}\n${JSON.stringify(snap.props)}`;
       for (const m of text.matchAll(BLOB_REF)) referenced.add(m[0]);
     }
-    const hashes = await this.store.listBlobHashes(space);
     let deleted = 0;
     for (const h of hashes) {
       if (!referenced.has(h)) {
@@ -687,7 +693,7 @@ export class SpaceHub {
   // Flush snapshots for all loaded docs (call on graceful shutdown).
   async snapshotAll(): Promise<void> {
     for (const [key, st] of this.docs) {
-      const [space, note] = key.split(" ");
+      const [space, note] = splitDocKey(key);
       if (st.lastSeq > 0) await this.snapshot(space, note, st);
     }
   }

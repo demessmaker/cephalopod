@@ -5,6 +5,9 @@ on:
     branches: ["**"]
   pull_request:
 
+permissions:
+  contents: read
+
 jobs:
   test:
     runs-on: ubuntu-latest
@@ -44,3 +47,12 @@ jobs:
       # broken bundle would otherwise only surface at `vsce package` time).
       - name: Build VS Code extension bundle
         run: (cd vscode && npm run build)
+
+      # Guard against vendored-bundle drift: if the committed web/src/vendor/*
+      # bundles don't match a fresh `npm run vendor` (e.g. yjs bumped in
+      # package.json but not re-vendored), the explorer would ship different
+      # bytecode than the tests exercise. Fail if regenerating changes anything.
+      - name: Vendored web bundles are up to date
+        run: |
+          (cd web && npm run vendor)
+          git diff --exit-code -- web/src/vendor
