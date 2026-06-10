@@ -318,6 +318,30 @@ export function createHttpServer(hub: SpaceHub, auth: Auth, opts: HttpOptions = 
     const mode = (c.url.searchParams.get("mode") ?? "text") as "text" | "semantic" | "hybrid";
     json(c.res, 200, { hits: q ? await hub.searchMode(c.params.space, q, mode, limit, drafts, tagFilters(c)) : [] });
   });
+  // Composed retrieval: a token-budgeted context bundle (hybrid search + 1-hop
+  // graph expansion), so an agent grounds an answer in one call instead of
+  // stitching search + neighbors + get_note itself (03 §4).
+  route("POST", "/spaces/:space/context", async (c) => {
+    if (!(await require(c, "read"))) return;
+    const b = c.body ?? {};
+    const query = typeof b.query === "string" ? b.query.trim() : "";
+    if (!query) return err(c.res, 400, "query required");
+    const clamp = (v: unknown, def: number, lo: number, hi: number) =>
+      Math.min(hi, Math.max(lo, Number.isFinite(v) ? Math.floor(v as number) : def));
+    const mode = (["text", "semantic", "hybrid"].includes(b.mode) ? b.mode : "hybrid") as "text" | "semantic" | "hybrid";
+    json(
+      c.res,
+      200,
+      await hub.getContext(c.params.space, query, {
+        tokenBudget: clamp(b.tokenBudget, 2000, 100, 32000),
+        mode,
+        hops: clamp(b.hops, 1, 0, 3),
+        seeds: clamp(b.seeds, 8, 1, 50),
+        includeDrafts: b.drafts === true,
+        tagFilters: Array.isArray(b.tags) ? b.tags : tagFilters(c),
+      }),
+    );
+  });
   route("GET", "/spaces/:space/tags", async (c) => {
     if (!(await require(c, "read"))) return;
     json(c.res, 200, { tags: await hub.tagCounts(c.params.space) });

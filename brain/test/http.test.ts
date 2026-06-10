@@ -119,4 +119,14 @@ describe("M2 brain — HTTP API + auth + search", () => {
     expect((await api("DELETE", `/spaces/eng/notes/${id}`, adminToken)).status).toBe(200);
     expect((await api("GET", `/spaces/eng/notes/${id}`, adminToken)).status).toBe(404);
   });
+
+  it("POST /context returns a budgeted bundle; validates query + auth", async () => {
+    expect((await api("POST", "/spaces/eng/context", null, { query: "customers" })).status).toBe(401);
+    expect((await api("POST", "/spaces/eng/context", adminToken, {})).status).toBe(400); // missing query
+    const r = await api("POST", "/spaces/eng/context", adminToken, { query: "customers", mode: "text", tokenBudget: 500 });
+    expect(r.status).toBe(200);
+    expect(r.body.items.some((i: any) => i.title === "Billing Service")).toBe(true);
+    expect(r.body.tokenBudget).toBe(500);
+    expect(r.body.usedTokens).toBeLessThanOrEqual(500);
+  });
 });
