@@ -22,6 +22,11 @@ export const api = {
   note: (id) => req("GET", `/notes/${encodeURIComponent(id)}`),
   neighbors: (id, hops = 1) => req("GET", `/notes/${encodeURIComponent(id)}/neighbors?hops=${hops}`),
   tags: () => req("GET", `/tags`),
+  // review queue (#29) + history/blame (#30) + the triage actions
+  review: () => req("GET", `/review`),
+  history: (id) => req("GET", `/notes/${encodeURIComponent(id)}/history`),
+  promote: (id) => req("POST", `/notes/${encodeURIComponent(id)}/promote`),
+  purge: (id) => req("POST", `/notes/${encodeURIComponent(id)}/purge`),
 };
 
 // Open a live subscription to a note; calls onUpdate() when it changes. Returns
