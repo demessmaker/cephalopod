@@ -580,11 +580,10 @@ export class SpaceHub {
   // anywhere in a note's title/body/props keeps the blob (we over-keep, never
   // over-delete). Admin-only; O(notes) — an occasional maintenance op, not per-write.
   async gcBlobs(space: string): Promise<{ scanned: number; deleted: number; kept: number }> {
-    // Snapshot the candidate set FIRST, then scan references. A blob uploaded
-    // concurrently (after this list) isn't a candidate, so the scan can't race it
-    // into deletion before its note lands — only blobs that existed at GC start can
-    // be reclaimed. (Residual: a note created mid-scan that references a *pre-existing*
-    // orphan can still be missed; run GC during a quiet window.)
+    // List the candidate set FIRST, before scanning: a blob uploaded after this
+    // point isn't a candidate, so a concurrent upload can't be raced into deletion
+    // before its note lands. (A note created mid-scan that references a *pre-existing*
+    // orphan can still be missed — run GC during a quiet window.)
     const hashes = await this.store.listBlobHashes(space);
     const referenced = new Set<string>();
     const BLOB_REF = /b_[0-9a-f]{6,}/g;
